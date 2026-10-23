@@ -95,7 +95,9 @@ export async function runDependencyCheck(): Promise<CheckResult> {
             // Check if it's only a patch mismatch (e.g. 3.6.3 vs 3.6.2) or a
             // minor/major mismatch (e.g. 3.7.0 vs 3.6.3). Patch mismatches are
             // unlikely to cause issues; minor/major mismatches can break things.
-            const majorMinors = new Set([...versions].map(v => v.split('.').slice(0, 2).join('.')));
+            const majorMinors = new Set(
+                [...versions].map(v => v.split('.').slice(0, 2).join('.')),
+            );
             if (majorMinors.size > 1) {
                 worstStatus = 'fail';
                 details.push('Mismatched @vendure/* package versions (minor/major):');
@@ -120,7 +122,9 @@ export async function runDependencyCheck(): Promise<CheckResult> {
     // resolved path and cannot detect duplicates. When cwd/node_modules
     // doesn't exist (hoisted monorepo), walk up to the nearest workspace
     // root and scan from there.
-    const scanDir = fs.existsSync(modulesDir) ? modulesDir : findNearestNodeModules(cwd);
+    const scanDir = fs.existsSync(modulesDir)
+        ? modulesDir
+        : findNearestNodeModules(cwd);
     if (scanDir) {
         const duplicates = findDuplicatePackages(scanDir, SINGLETON_PACKAGES);
         for (const [pkg, versions] of duplicates) {
@@ -226,7 +230,10 @@ function findPackageVersionFromEntry(entryPath: string, pkgName: string): string
  * Finds duplicate installations of packages by scanning nested node_modules.
  * Returns a map of package name -> list of installed versions.
  */
-function findDuplicatePackages(modulesDir: string, packages: string[]): Map<string, string[]> {
+function findDuplicatePackages(
+    modulesDir: string,
+    packages: string[],
+): Map<string, string[]> {
     const result = new Map<string, string[]>();
 
     for (const pkg of packages) {
@@ -246,10 +253,7 @@ function findDuplicatePackages(modulesDir: string, packages: string[]): Map<stri
         }
 
         if (versions.size > 0) {
-            result.set(
-                pkg,
-                [...versions].sort((a, b) => a.localeCompare(b)),
-            );
+            result.set(pkg, [...versions].sort((a, b) => a.localeCompare(b)));
         }
     }
 
@@ -374,7 +378,9 @@ function groupByVersion(packages: Map<string, string>): Map<string, string[]> {
  * Uses Node's module resolution (require.resolve) so hoisted packages in monorepo
  * workspaces are found correctly -- matching the way Node resolves them at runtime.
  */
-function checkDbDriver(cwd: string): { status: 'pass' | 'warn' | 'fail'; message: string } | null {
+function checkDbDriver(
+    cwd: string,
+): { status: 'pass' | 'warn' | 'fail'; message: string } | null {
     const dbType = detectDbTypeFromSource(cwd);
     if (!dbType) {
         return null;
@@ -437,9 +443,7 @@ function detectDbTypeFromSource(cwd: string): string | undefined {
         try {
             const content = fs.readFileSync(filePath, 'utf-8');
             // Match type within dbConnectionOptions block
-            const dbBlockMatch = content.match(
-                /dbConnectionOptions\s*[:{][\s\S]*?type\s*:\s*['"]([^'"]+)['"]/,
-            );
+            const dbBlockMatch = content.match(/dbConnectionOptions\s*[:{][\s\S]*?type\s*:\s*['"]([^'"]+)['"]/);
             if (dbBlockMatch) {
                 return dbBlockMatch[1];
             }
