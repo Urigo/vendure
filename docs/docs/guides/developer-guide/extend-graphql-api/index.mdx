@@ -378,7 +378,7 @@ extend type Mutation {
 }
 ```
 
-In this example, the resolver which handles the `myCustomMutation` operation will be returning either an `Order` object or a `MyCustomErrorResult` object. The problem here is that the GraphQL server has no way of knowing which one it is at run-time. Luckily Apollo Server (on which Vendure is built) has a means to solve this:
+In this example, the resolver which handles the `myCustomMutation` operation will be returning either an `Order` object or a `MyCustomErrorResult` object. The problem here is that the GraphQL server has no way of knowing which one it is at run-time. Luckily GraphQL has a means to solve this, which Apollo Server's documentation describes well:
 
 > To fully resolve a union, Apollo Server needs to specify which of the union's types is being returned. To achieve this, you define a `__resolveType` function for the union in your resolver map.
 > 

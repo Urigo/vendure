@@ -300,6 +300,20 @@ export interface ApiOptions {
      * `willSendResponse` etc.) onto the corresponding Yoga hooks, and exposes a `GraphQLRequestContext` with the
      * same shape and mutability as Apollo's.
      *
+     * The compatibility layer is verified by a differential test suite which runs the same plugins on a real
+     * `ApolloServer` and on Vendure's Yoga setup and compares what the plugins observe and what clients receive.
+     * The known differences are:
+     *
+     * - `GraphQLServerListener.renderLandingPage` is ignored; Vendure serves GraphiQL itself (see `playground`).
+     * - `requestContext.cache` / `GraphQLServerContext.cache` is a small in-memory key-value cache rather than
+     *   Apollo's `InMemoryLRUCache`.
+     * - `parsingDidStart` and `validationDidStart` are invoked synchronously; their `*DidEnd` callbacks are still
+     *   awaited in order before `didResolveOperation`.
+     * - When the operation to run cannot be determined (an unknown `operationName`, or several operations and no
+     *   `operationName`), the request is rejected right after parsing: plugins see `didEncounterErrors` and
+     *   `willSendResponse` without the validation and execution hooks, and the error message is
+     *   "Could not determine what operation to execute." (same HTTP 400 and `OPERATION_RESOLUTION_FAILURE` code).
+     *
      * New plugins should preferably use {@link ApiOptions.graphqlPlugins}, which accepts native Yoga/Envelop
      * plugins and gives access to the full [Yoga plugin ecosystem](https://the-guild.dev/graphql/envelop/plugins).
      *
@@ -319,13 +333,12 @@ export interface ApiOptions {
      *
      * @example
      * ```ts
-     * import { useResponseCache } from '@graphql-yoga/plugin-response-cache';
+     * import { maxDepthPlugin } from '@escape.tech/graphql-armor-max-depth';
      *
      * const config: VendureConfig = {
      *   apiOptions: {
-     *     graphqlPlugins: [
-     *       useResponseCache({ session: () => null, ttl: 2_000 }),
-     *     ],
+     *     // Reject queries nested more than 10 levels deep
+     *     graphqlPlugins: [maxDepthPlugin({ n: 10 })],
      *   },
      * };
      * ```
