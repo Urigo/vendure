@@ -22,8 +22,8 @@ export class TranslateErrorsPlugin implements Plugin {
                     const req = (args.contextValue as any)?.req;
                     setResult({
                         ...result,
-                        errors: result.errors.map(
-                            err => this.i18nService.translateError(req, err as GraphQLError),
+                        errors: result.errors.map(err =>
+                            this.i18nService.translateError(req, err as GraphQLError),
                         ),
                     });
                 }),

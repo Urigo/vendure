@@ -208,7 +208,8 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
 
     function buildHttpRequest(request: Request, context: any, params: any) {
         const headers = new HeaderMap();
-        for (const [key, value] of options.getRequestHeaders?.(context, request) ?? requestHeaderEntries(request)) {
+        for (const [key, value] of options.getRequestHeaders?.(context, request) ??
+            requestHeaderEntries(request)) {
             headers.set(key, value);
         }
         let search = '';
@@ -295,7 +296,8 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
                 contextValue: context,
                 metrics: {},
                 overallCachePolicy: newCachePolicy(),
-                requestIsBatched: batchedByServerContext.get(Object.getPrototypeOf(context) ?? context) ??
+                requestIsBatched:
+                    batchedByServerContext.get(Object.getPrototypeOf(context) ?? context) ??
                     batchedByServerContext.get(context) ??
                     false,
             };
@@ -310,9 +312,9 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
             };
             stateByContext.set(context, state);
 
-            state.listeners = (await Promise.all(plugins.map(p => p.requestDidStart?.(requestContext as any)))).filter(
-                (l): l is RequestListener => !!l,
-            );
+            state.listeners = (
+                await Promise.all(plugins.map(p => p.requestDidStart?.(requestContext as any)))
+            ).filter((l): l is RequestListener => !!l);
             if (typeof params.query === 'string') {
                 requestContext.source = params.query;
                 requestContext.queryHash = computeQueryHash(params.query);
@@ -381,10 +383,10 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
                 return;
             }
 
-            const responseFromPlugin = await invokeHooksUntilDefinedAndNonNull<RequestListener, GraphQLResponse>(
-                listeners,
-                async l => (await l.responseForOperation?.(requestContext as any)) ?? null,
-            );
+            const responseFromPlugin = await invokeHooksUntilDefinedAndNonNull<
+                RequestListener,
+                GraphQLResponse
+            >(listeners, async l => (await l.responseForOperation?.(requestContext as any)) ?? null);
             if (responseFromPlugin) {
                 state.responseFromPlugin = true;
                 if (responseFromPlugin.http) {
@@ -427,6 +429,7 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
                     }
                     if (result.errors?.length) {
                         await didEncounterErrors(state, result.errors);
+                        applyHttpFromErrors(state, result);
                     }
                     state.executionEnded = true;
                     await Promise.all(state.executionListeners.map(l => l.executionDidEnd?.()));
@@ -467,15 +470,20 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
                 // Parse or validation failures, or a request-level error for this operation.
                 await didEncounterErrors(state, singleResult.errors);
             }
-            if (singleResult.errors?.length && !state.executionStarted && !requestContext.response.http.status) {
+            if (
+                singleResult.errors?.length &&
+                !state.executionStarted &&
+                !requestContext.response.http.status
+            ) {
                 // Apollo's SyntaxError / ValidationError carry a 400 status.
                 requestContext.response.http.status = 400;
             }
             (requestContext.response as any).body = { kind: 'single', singleResult };
+            const errorsBeforeHook = new Set<unknown>(singleResult.errors ?? []);
             await Promise.all(listeners.map(l => l.willSendResponse?.(requestContext as any)));
             const body = (requestContext.response as any).body;
             const finalResult: ExecutionResult = body?.kind === 'single' ? body.singleResult : singleResult;
-            setResult(finalizeHttp(state, finalResult));
+            setResult(finalizeHttp(state, freezeErrorsAddedByPlugins(finalResult, errorsBeforeHook)));
         },
 
         async onResultProcess({ result, serverContext }) {
@@ -520,7 +528,9 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
                                     yield* subsequentResults;
                                 })(),
                             };
-                            await Promise.all(listeners.map(l => l.willSendResponse?.(requestContext as any)));
+                            await Promise.all(
+                                listeners.map(l => l.willSendResponse?.(requestContext as any)),
+                            );
                         } else {
                             if (next.value.errors?.length) {
                                 await Promise.all(
@@ -546,6 +556,59 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
             },
         };
     }
+}
+
+/**
+ * Mirrors what Apollo Server does with execution errors before `executionDidEnd`: the HTTP status
+ * and headers carried by the errors (`extensions.http`) are merged into `response.http`, and a
+ * response with errors but no `data` at all (i.e. variable coercion failed) gets a 400 status
+ * (Apollo Server 5's `status400ForVariableCoercionErrors`, which defaults to `true`).
+ */
+function applyHttpFromErrors(state: OperationState, result: ExecutionResult) {
+    const http = state.requestContext.response.http;
+    let status: number | undefined;
+    const sources = [result.extensions?.http, ...(result.errors ?? []).map(e => e.extensions?.http)];
+    for (const source of sources as Array<
+        { status?: number; headers?: Record<string, string> } | undefined
+    >) {
+        if (source?.status) {
+            status = source.status;
+        }
+        if (source?.headers) {
+            for (const [key, value] of source.headers instanceof Map
+                ? source.headers
+                : Object.entries(source.headers)) {
+                http.headers.set(key, value);
+            }
+        }
+    }
+    if (!status && result.data === undefined && result.errors?.length) {
+        status = 400;
+    }
+    if (status && !http.status) {
+        http.status = status;
+    }
+}
+
+/**
+ * Apollo Server formats errors *before* `willSendResponse`, so an error which a plugin puts into
+ * `response.body.singleResult.errors` at that point is serialized exactly as the plugin built it
+ * (no `extensions.code` gets added to it afterwards). Errors which were not on the response before
+ * the hook ran are therefore turned into their serialized form, which later Yoga plugins leave as is.
+ */
+function freezeErrorsAddedByPlugins(
+    result: ExecutionResult,
+    errorsBeforeHook: Set<unknown>,
+): ExecutionResult {
+    if (!result.errors?.some(e => !errorsBeforeHook.has(e))) {
+        return result;
+    }
+    return {
+        ...result,
+        errors: result.errors.map(e =>
+            errorsBeforeHook.has(e) || typeof (e as any)?.toJSON !== 'function' ? e : (e as any).toJSON(),
+        ),
+    };
 }
 
 function requestHeaderEntries(request: Request): Array<[string, string]> {

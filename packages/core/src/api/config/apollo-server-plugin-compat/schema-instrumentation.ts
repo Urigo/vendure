@@ -7,9 +7,17 @@
  * symbol. This file reproduces that mechanism so that plugins which rely on per-field timing
  * (tracing, usage reporting, custom profilers) behave identically under Yoga.
  */
-import { defaultFieldResolver, GraphQLField, GraphQLNamedType, GraphQLObjectType, GraphQLSchema } from 'graphql';
+import {
+    defaultFieldResolver,
+    GraphQLField,
+    GraphQLNamedType,
+    GraphQLObjectType,
+    GraphQLSchema,
+} from 'graphql';
 
-export const symbolExecutionDispatcherWillResolveField = Symbol('apolloServerExecutionDispatcherWillResolveField');
+export const symbolExecutionDispatcherWillResolveField = Symbol(
+    'apolloServerExecutionDispatcherWillResolveField',
+);
 export const symbolUserFieldResolver = Symbol('apolloServerUserFieldResolver');
 const symbolPluginsEnabled = Symbol('apolloServerPluginsEnabled');
 
@@ -35,10 +43,7 @@ export function enablePluginsForSchemaResolvers(schema: GraphQLSchema): GraphQLS
  * with `Symbol.toStringTag`, which survives that.
  */
 function isObjectTypeAcrossRealms(type: GraphQLNamedType): type is GraphQLObjectType {
-    return (
-        type instanceof GraphQLObjectType ||
-        (type as any)[Symbol.toStringTag] === 'GraphQLObjectType'
-    );
+    return type instanceof GraphQLObjectType || (type as any)[Symbol.toStringTag] === 'GraphQLObjectType';
 }
 
 export function pluginsEnabledForSchemaResolvers(schema: GraphQLSchema): boolean {

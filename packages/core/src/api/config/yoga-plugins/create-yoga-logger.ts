@@ -22,7 +22,7 @@ export function createYogaLogger(): YogaLogger {
         writers: [
             {
                 write(level, rawAttrs, msg) {
-                    const attrs = (Array.isArray(rawAttrs) ? { values: rawAttrs } : rawAttrs);
+                    const attrs = Array.isArray(rawAttrs) ? { values: rawAttrs } : rawAttrs;
                     const message = formatMessage(attrs, msg);
                     switch (level) {
                         case 'error':
@@ -48,7 +48,10 @@ export function createYogaLogger(): YogaLogger {
     });
 }
 
-function formatMessage(attrs: Record<string, unknown> | null | undefined, msg: string | null | undefined): string {
+function formatMessage(
+    attrs: Record<string, unknown> | null | undefined,
+    msg: string | null | undefined,
+): string {
     if (!attrs || Object.keys(attrs).length === 0) {
         return msg ?? '';
     }

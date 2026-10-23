@@ -145,7 +145,9 @@ async function createGraphQLOptions(
         // `playground` is a deprecated alias for GraphiQL. The options it used to accept configured
         // the GraphQL Playground, which no longer exists, so only the truthiness of the configured
         // value still means anything: a truthy value serves GraphiQL at the API path.
-        graphiql: options.playground ? { title: `Vendure ${options.apiType === 'admin' ? 'Admin' : 'Shop'} API` } : false,
+        graphiql: options.playground
+            ? { title: `Vendure ${options.apiType === 'admin' ? 'Admin' : 'Shop'} API` }
+            : false,
         // Only the API path itself is served; Yoga's landing page for unhandled routes is not wanted
         // behind Nest's router.
         landingPage: false,

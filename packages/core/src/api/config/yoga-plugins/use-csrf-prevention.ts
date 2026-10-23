@@ -28,13 +28,20 @@ export interface CsrfPreventionOptions {
  * `@vendure/dashboard`, `@vendure/testing`) sends `Apollo-Require-Preflight: true`, and the
  * Apollo Client ecosystem sends `x-apollo-operation-name`, so these stay the defaults.
  */
-export const recommendedCsrfPreventionRequestHeaders = ['x-apollo-operation-name', 'apollo-require-preflight'];
+export const recommendedCsrfPreventionRequestHeaders = [
+    'x-apollo-operation-name',
+    'apollo-require-preflight',
+];
 
 /**
  * Content types which a browser lets an HTML form or a "simple" `fetch` send cross-origin
  * without a CORS preflight.
  */
-const NON_PREFLIGHTED_CONTENT_TYPES = ['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain'];
+const NON_PREFLIGHTED_CONTENT_TYPES = [
+    'application/x-www-form-urlencoded',
+    'multipart/form-data',
+    'text/plain',
+];
 
 /**
  * A Yoga plugin which reproduces Apollo Server's `csrfPrevention` feature exactly: the same

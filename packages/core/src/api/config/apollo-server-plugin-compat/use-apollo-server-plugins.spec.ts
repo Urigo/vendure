@@ -67,7 +67,9 @@ function createRecordingPlugin(overrides: Partial<GraphQLRequestListener<any>> =
                     };
                 },
                 async didResolveOperation(rc) {
-                    events.push(`didResolveOperation(${rc.operationName ?? 'null'}:${rc.operation?.operation})`);
+                    events.push(
+                        `didResolveOperation(${rc.operationName ?? 'null'}:${rc.operation?.operation})`,
+                    );
                 },
                 async executionDidStart() {
                     events.push('executionDidStart');
@@ -206,7 +208,11 @@ describe('useApolloServerPlugins()', () => {
 
         expect(status).toBe(200);
         expect(body.errors[0].message).toBe('resolver exploded');
-        expect(events.slice(-3)).toEqual(['didEncounterErrors(1)', 'executionDidEnd(ok)', 'willSendResponse(single)']);
+        expect(events.slice(-3)).toEqual([
+            'didEncounterErrors(1)',
+            'executionDidEnd(ok)',
+            'willSendResponse(single)',
+        ]);
     });
 
     it('turns an error thrown from didResolveOperation into the response, as Apollo does', async () => {
@@ -279,7 +285,11 @@ describe('useApolloServerPlugins()', () => {
         await post(yoga, { query: '{ product(id: "1") { name price } }' });
 
         expect(resolved).toEqual(
-            expect.arrayContaining(['Query.product={"id":"1","name":"Laptop","price":1000}', 'Product.name="Laptop"', 'Product.price=1000']),
+            expect.arrayContaining([
+                'Query.product={"id":"1","name":"Laptop","price":1000}',
+                'Product.name="Laptop"',
+                'Product.price=1000',
+            ]),
         );
     });
 

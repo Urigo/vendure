@@ -1,7 +1,10 @@
 import { getOperationAST, GraphQLError, GraphQLErrorExtensions } from 'graphql';
 import { handleStreamOrSingleExecutionResult, Plugin } from 'graphql-yoga';
 
-import { isBadUserInputGraphQLError, isGraphQLErrorLike } from '../apollo-server-plugin-compat/apollo-request-context';
+import {
+    isBadUserInputGraphQLError,
+    isGraphQLErrorLike,
+} from '../apollo-server-plugin-compat/apollo-request-context';
 
 /**
  * The `extensions.code` values which Apollo Server attaches to errors it raises itself
@@ -98,9 +101,7 @@ export function useApolloCompatibleErrors(): Plugin {
                         setResult({
                             ...result,
                             errors,
-                            ...(status
-                                ? { extensions: { ...result.extensions, http: { status } } }
-                                : {}),
+                            ...(status ? { extensions: { ...result.extensions, http: { status } } } : {}),
                         });
                     });
                 },

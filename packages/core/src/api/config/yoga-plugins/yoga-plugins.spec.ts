@@ -43,7 +43,12 @@ async function post(yoga: YogaServerInstance<any, any>, body: unknown, headers: 
 }
 
 describe('useApolloCompatibleErrors()', () => {
-    const yoga = createYoga({ schema, logging: false, maskedErrors: false, plugins: [useApolloCompatibleErrors()] });
+    const yoga = createYoga({
+        schema,
+        logging: false,
+        maskedErrors: false,
+        plugins: [useApolloCompatibleErrors()],
+    });
 
     afterEach(async () => {
         await yoga.dispose();
@@ -92,7 +97,10 @@ describe('useApolloCompatibleErrors()', () => {
     it('maps NestJS HttpExceptions like @nestjs/apollo did', async () => {
         const { body } = await post(yoga, { query: '{ httpFails }' });
         expect(body.errors[0].extensions.code).toBe('FORBIDDEN');
-        expect(body.errors[0].extensions.originalError).toEqual({ statusCode: 403, message: 'Forbidden resource' });
+        expect(body.errors[0].extensions.originalError).toEqual({
+            statusCode: 403,
+            message: 'Forbidden resource',
+        });
     });
 
     it('BAD_REQUEST / 400 for requests which never reach an operation', async () => {
@@ -110,9 +118,13 @@ describe('useCsrfPrevention()', () => {
         await yoga?.dispose();
     });
 
-    it('blocks non-preflighted content types with Apollo\'s 400 BAD_REQUEST response', async () => {
+    it("blocks non-preflighted content types with Apollo's 400 BAD_REQUEST response", async () => {
         yoga = createYoga({ schema, logging: false, plugins: [useCsrfPrevention(true)] });
-        for (const contentType of ['application/x-www-form-urlencoded', 'multipart/form-data; boundary=x', 'text/plain']) {
+        for (const contentType of [
+            'application/x-www-form-urlencoded',
+            'multipart/form-data; boundary=x',
+            'text/plain',
+        ]) {
             const { status, body, text } = await post(yoga, '{ "query": "{ product(id: \\"1\\") }" }', {
                 'content-type': contentType,
             });
