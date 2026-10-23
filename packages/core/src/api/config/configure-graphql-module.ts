@@ -103,8 +103,6 @@ async function createGraphQLOptions(
         // Apollo Server enabled Automatic Persisted Queries by default, and storefronts built
         // on Apollo Client's `createPersistedQueryLink()` rely on the protocol being present.
         useAPQ(),
-        new TranslateErrorsPlugin(i18nService),
-        new AssetInterceptorPlugin(configService),
     ];
     if (apiOptions.csrfPrevention) {
         // Runs first so that a blocked request never reaches the request parser.
@@ -121,6 +119,11 @@ async function createGraphQLOptions(
     ) {
         plugins.push(new IdCodecPlugin(idCodecService, options.apiType));
     }
+    // Vendure's own response transformers run in the same order as under Apollo Server: the
+    // IdCodecPlugin first (its encoding of JSON values also replaces any entity instances in them
+    // with plain copies, which the AssetInterceptorPlugin then writes to), then error translation,
+    // then asset URLs.
+    plugins.push(new TranslateErrorsPlugin(i18nService), new AssetInterceptorPlugin(configService));
     plugins.push(...(apiOptions.graphqlPlugins ?? []));
     if (apiOptions.apolloServerPlugins.length) {
         // Any Apollo Server plugins supplied by the user (or by Vendure plugins such as
