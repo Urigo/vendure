@@ -11,7 +11,7 @@ import { Plugin } from 'graphql-yoga';
  * identical.
  */
 export function useValidationRules(options: {
-    rules: ReadonlyArray<ValidationRule>;
+    rules: readonly ValidationRule[];
     introspection: boolean;
 }): Plugin {
     const rules: ValidationRule[] = [...options.rules];

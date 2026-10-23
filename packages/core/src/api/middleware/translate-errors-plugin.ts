@@ -23,9 +23,9 @@ export class TranslateErrorsPlugin implements Plugin {
                     setResult({
                         ...result,
                         errors: result.errors.map(
-                            err => this.i18nService.translateError(req, err as GraphQLError) as GraphQLError,
+                            err => this.i18nService.translateError(req, err as GraphQLError),
                         ),
-                    } as typeof result);
+                    });
                 }),
         };
     };

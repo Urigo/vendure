@@ -22,10 +22,7 @@ export function createYogaLogger(): YogaLogger {
         writers: [
             {
                 write(level, rawAttrs, msg) {
-                    const attrs = (Array.isArray(rawAttrs) ? { values: rawAttrs } : rawAttrs) as
-                        | Record<string, unknown>
-                        | null
-                        | undefined;
+                    const attrs = (Array.isArray(rawAttrs) ? { values: rawAttrs } : rawAttrs);
                     const message = formatMessage(attrs, msg);
                     switch (level) {
                         case 'error':

@@ -1,4 +1,6 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/await-thenable, @typescript-eslint/unbound-method, @typescript-eslint/require-await */
+// The disabled rules above are triggered by the faithful port of Apollo Server's request pipeline,
+// which awaits `Promise.all()` over optional plugin hooks that may return `undefined`.
 import type {
     ApolloServerPlugin,
     GraphQLRequestContext,
@@ -36,7 +38,7 @@ export interface ApolloServerPluginCompatOptions {
      * them: `requestDidStart` is awaited for all plugins before the request proceeds, and the
      * `*DidEnd` callbacks run in reverse order.
      */
-    plugins: ApolloServerPlugin<any>[];
+    plugins: Array<ApolloServerPlugin<any>>;
     /**
      * @description
      * The logger exposed as `requestContext.logger` / `GraphQLServerContext.logger`.
@@ -92,6 +94,8 @@ interface OperationState {
     executionEnded: boolean;
     /** A plugin's `responseForOperation` short-circuited execution. */
     responseFromPlugin: boolean;
+    /** The request reached the execution phase (as opposed to failing in parse/validate). */
+    executionStarted: boolean;
 }
 
 const stateByContext = new WeakMap<object, OperationState>();
@@ -231,7 +235,7 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
         return {
             ...result,
             extensions: { ...(result.extensions as object | undefined), http },
-        } as ExecutionResult;
+        };
     }
 
     return {
@@ -302,6 +306,7 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
                 errorsReported: false,
                 executionEnded: false,
                 responseFromPlugin: false,
+                executionStarted: false,
             };
             stateByContext.set(context, state);
 
@@ -339,8 +344,10 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
             if (!state || state.listeners.length === 0) {
                 return;
             }
-            const validationDidEnd = invokeDidStartHook(state.listeners, l =>
-                l.validationDidStart?.(state.requestContext as any),
+            // Wait for the parsing phase to have fully reported before announcing validation, so
+            // that `validationDidStart` is observed after `parsingDidEnd` as in Apollo Server.
+            const validationDidEnd = (state.parsingDone ?? Promise.resolve()).then(() =>
+                invokeDidStartHook(state.listeners, l => l.validationDidStart?.(state.requestContext as any)),
             );
             return ({ valid, result }) => {
                 state.validationDone = validationDidEnd.then(end =>
@@ -360,6 +367,7 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
             // next Apollo phase begins, preserving Apollo's strict ordering.
             await state.parsingDone;
             await state.validationDone;
+            state.executionStarted = true;
             requestContext.schema = args.schema;
             requestContext.document = args.document;
             const operation = getOperationAST(args.document, args.operationName);
@@ -387,9 +395,9 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
                     responseFromPlugin.http.headers?.forEach((value, key) => http.headers.set(key, value));
                 }
                 if (responseFromPlugin.body.kind === 'single') {
-                    setResultAndStopExecution(responseFromPlugin.body.singleResult as ExecutionResult);
+                    setResultAndStopExecution(responseFromPlugin.body.singleResult);
                 } else {
-                    setResultAndStopExecution(responseFromPlugin.body.initialResult as ExecutionResult);
+                    setResultAndStopExecution(responseFromPlugin.body.initialResult);
                 }
                 return;
             }
@@ -432,6 +440,10 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
                 return;
             }
             const { requestContext, listeners } = state;
+            // When parse or validation failed, execution never ran, so make sure their *DidEnd
+            // callbacks have been reported before `didEncounterErrors` / `willSendResponse`.
+            await state.parsingDone;
+            await state.validationDone;
 
             if (!state.executionEnded && !state.responseFromPlugin && state.executionListeners.length) {
                 // Execution itself threw (as opposed to returning errors) and Yoga turned the
@@ -454,10 +466,10 @@ export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions)
             if (singleResult.errors?.length && !state.errorsReported) {
                 // Parse or validation failures, or a request-level error for this operation.
                 await didEncounterErrors(state, singleResult.errors);
-                if (!requestContext.response.http.status && !requestContext.document) {
-                    // Apollo's SyntaxError / ValidationError carry a 400 status.
-                    requestContext.response.http.status = 400;
-                }
+            }
+            if (singleResult.errors?.length && !state.executionStarted && !requestContext.response.http.status) {
+                // Apollo's SyntaxError / ValidationError carry a 400 status.
+                requestContext.response.http.status = 400;
             }
             (requestContext.response as any).body = { kind: 'single', singleResult };
             await Promise.all(listeners.map(l => l.willSendResponse?.(requestContext as any)));

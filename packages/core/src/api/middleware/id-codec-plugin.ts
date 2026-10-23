@@ -34,7 +34,7 @@ export class IdCodecPlugin implements Plugin {
         return {
             onExecuteDone: payload =>
                 handleStreamOrSingleExecutionResult(payload, ({ result, args }) => {
-                    this.encodeIdFields(args.document, result.data as Record<string, unknown> | null | undefined);
+                    this.encodeIdFields(args.document, result.data);
                 }),
         };
     };

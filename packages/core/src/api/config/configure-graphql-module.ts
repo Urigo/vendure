@@ -22,8 +22,8 @@ import { generateResolvers } from './generate-resolvers';
 import { getFinalVendureSchema, isUsingDefaultEntityIdStrategy } from './get-final-vendure-schema';
 import { VendureYogaDriver } from './vendure-yoga-driver';
 import { createYogaLogger } from './yoga-plugins/create-yoga-logger';
-import { useApolloCompatibleErrors } from './yoga-plugins/use-apollo-compatible-errors';
 import { getOriginalRequestHeaderEntries } from './yoga-plugins/original-request-headers';
+import { useApolloCompatibleErrors } from './yoga-plugins/use-apollo-compatible-errors';
 import { useCsrfPrevention } from './yoga-plugins/use-csrf-prevention';
 import { useValidationRules } from './yoga-plugins/use-validation-rules';
 

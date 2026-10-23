@@ -7,7 +7,7 @@
  * symbol. This file reproduces that mechanism so that plugins which rely on per-field timing
  * (tracing, usage reporting, custom profilers) behave identically under Yoga.
  */
-import { defaultFieldResolver, getNamedType, GraphQLField, GraphQLObjectType, GraphQLSchema } from 'graphql';
+import { defaultFieldResolver, GraphQLField, GraphQLNamedType, GraphQLObjectType, GraphQLSchema } from 'graphql';
 
 export const symbolExecutionDispatcherWillResolveField = Symbol('apolloServerExecutionDispatcherWillResolveField');
 export const symbolUserFieldResolver = Symbol('apolloServerUserFieldResolver');
@@ -19,13 +19,26 @@ export function enablePluginsForSchemaResolvers(schema: GraphQLSchema): GraphQLS
     }
     Object.defineProperty(schema, symbolPluginsEnabled, { value: true });
     for (const type of Object.values(schema.getTypeMap())) {
-        if (!getNamedType(type).name.startsWith('__') && type instanceof GraphQLObjectType) {
+        if (!type.name.startsWith('__') && isObjectTypeAcrossRealms(type)) {
             for (const field of Object.values(type.getFields())) {
                 wrapField(field);
             }
         }
     }
     return schema;
+}
+
+/**
+ * `instanceof GraphQLObjectType` (which Apollo uses) fails when the schema was built by a
+ * different copy of `graphql` than the one this module imported, e.g. the ESM and CJS builds
+ * of the same version loaded side by side under a test runner. graphql-js tags its classes
+ * with `Symbol.toStringTag`, which survives that.
+ */
+function isObjectTypeAcrossRealms(type: GraphQLNamedType): type is GraphQLObjectType {
+    return (
+        type instanceof GraphQLObjectType ||
+        (type as any)[Symbol.toStringTag] === 'GraphQLObjectType'
+    );
 }
 
 export function pluginsEnabledForSchemaResolvers(schema: GraphQLSchema): boolean {

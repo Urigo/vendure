@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 /**
  * Minimal re-implementations of the small Apollo Server runtime values which an
  * `ApolloServerPlugin` expects to find on its `GraphQLRequestContext`.
@@ -141,12 +142,28 @@ export function computeQueryHash(query: string): string {
 }
 
 /**
+ * `instanceof GraphQLError` fails when the error was created by a different copy of `graphql`
+ * than the one this module imported (e.g. the ESM and CJS builds of the same version loaded side
+ * by side under a test runner), so a structural check is used instead. Plain formatted-error
+ * objects (`{ message }`) are not `Error` instances and are therefore excluded.
+ */
+export function isGraphQLErrorLike(value: unknown): value is GraphQLError {
+    return (
+        value instanceof GraphQLError ||
+        (value instanceof Error &&
+            typeof (value as GraphQLError).extensions === 'object' &&
+            (value as GraphQLError).extensions !== null &&
+            'locations' in value)
+    );
+}
+
+/**
  * Port of Apollo Server's `ensureGraphQLError()`: anything thrown by a plugin hook is
  * surfaced to the client as a GraphQLError, exactly as Apollo does.
  */
 export function ensureGraphQLError(maybeError: unknown): GraphQLError {
     const error = maybeError instanceof Error ? maybeError : new Error(String(maybeError));
-    return error instanceof GraphQLError ? error : new GraphQLError(error.message, { originalError: error });
+    return isGraphQLErrorLike(error) ? error : new GraphQLError(error.message, { originalError: error });
 }
 
 /**
@@ -175,6 +192,7 @@ export async function invokeDidStartHook<T, TArgs extends any[]>(
     targets: readonly T[],
     hook: (target: T) => Promise<((...args: TArgs) => Promise<void> | void) | void> | void,
 ): Promise<(...args: TArgs) => Promise<void>> {
+    // eslint-disable-next-line @typescript-eslint/await-thenable
     const didEndHooks = (await Promise.all(targets.map(target => hook(target)))).filter(
         (fn): fn is (...args: TArgs) => Promise<void> | void => typeof fn === 'function',
     );

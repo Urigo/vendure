@@ -37,7 +37,7 @@ export class AssetInterceptorPlugin implements Plugin {
                 handleStreamOrSingleExecutionResult(payload, ({ result, args }) => {
                     if (result.data) {
                         const req = (args.contextValue as any)?.req;
-                        this.prefixAssetUrls(req, args.document, result.data as Record<string, unknown>);
+                        this.prefixAssetUrls(req, args.document, result.data);
                     }
                 }),
         };

@@ -1,7 +1,7 @@
 import { getOperationAST, GraphQLError, GraphQLErrorExtensions } from 'graphql';
 import { handleStreamOrSingleExecutionResult, Plugin } from 'graphql-yoga';
 
-import { isBadUserInputGraphQLError } from '../apollo-server-plugin-compat/apollo-request-context';
+import { isBadUserInputGraphQLError, isGraphQLErrorLike } from '../apollo-server-plugin-compat/apollo-request-context';
 
 /**
  * The `extensions.code` values which Apollo Server attaches to errors it raises itself
@@ -49,7 +49,7 @@ export function useApolloCompatibleErrors(): Plugin {
     return {
         onParse() {
             return ({ result, replaceParseResult }) => {
-                if (result instanceof GraphQLError) {
+                if (isGraphQLErrorLike(result)) {
                     replaceParseResult(withCode(result, ApolloErrorCode.GRAPHQL_PARSE_FAILED, 400));
                 }
             };
@@ -59,7 +59,7 @@ export function useApolloCompatibleErrors(): Plugin {
                 if (!valid) {
                     setResult(
                         result.map(error =>
-                            error instanceof GraphQLError
+                            isGraphQLErrorLike(error)
                                 ? withCode(error, ApolloErrorCode.GRAPHQL_VALIDATION_FAILED, 400)
                                 : error,
                         ),
@@ -101,11 +101,12 @@ export function useApolloCompatibleErrors(): Plugin {
                             ...(status
                                 ? { extensions: { ...result.extensions, http: { status } } }
                                 : {}),
-                        } as typeof result);
+                        });
                     });
                 },
             };
         },
+        // eslint-disable-next-line @typescript-eslint/unbound-method
         onResultProcess({ result, setResult }) {
             // Request-level errors never pass through parse/validate/execute, so give them a code too.
             if (Array.isArray(result) || isAsyncIterable(result) || !result.errors?.length) {
@@ -113,11 +114,25 @@ export function useApolloCompatibleErrors(): Plugin {
             }
             let changed = false;
             const errors = result.errors.map(error => {
+                // Errors which a plugin has already replaced with a formatted object (e.g.
+                // HardenPlugin's `{ message: 'Invalid request' }`) are sent exactly as the plugin
+                // left them, just as Apollo Server did.
+                if (!isGraphQLErrorLike(error)) {
+                    return error;
+                }
+                const http = error.extensions?.http;
+                if (http?.spec) {
+                    // Yoga marks parse/validation errors with `spec: true`, meaning "respond with the
+                    // status only to clients which accept application/graphql-response+json, 200
+                    // otherwise", as the GraphQL-over-HTTP spec allows. Apollo Server always sent the
+                    // status (400), which is what existing clients expect.
+                    http.spec = false;
+                    changed = true;
+                }
                 if (error.extensions?.code != null) {
                     return error;
                 }
                 changed = true;
-                const http = error.extensions?.http as { status?: number } | undefined;
                 const code =
                     http?.status && http.status >= 400 && http.status < 500
                         ? ApolloErrorCode.BAD_REQUEST
@@ -137,6 +152,10 @@ export function useApolloCompatibleErrors(): Plugin {
  * graphql-js allows to be mutated; Yoga strips `extensions.http` before serializing.
  */
 function withCode(error: GraphQLError, code: string, status?: number): GraphQLError {
+    if (!error.extensions) {
+        // A plain formatted error which only looks like a GraphQLError; leave it alone.
+        return error;
+    }
     const extensions = error.extensions as GraphQLErrorExtensions & Record<string, unknown>;
     if (extensions.code == null) {
         extensions.code = code;
