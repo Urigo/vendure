@@ -25,6 +25,7 @@ import { createYogaLogger } from './yoga-plugins/create-yoga-logger';
 import { getOriginalRequestHeaderEntries } from './yoga-plugins/original-request-headers';
 import { useApolloCompatibleErrors } from './yoga-plugins/use-apollo-compatible-errors';
 import { useCsrfPrevention } from './yoga-plugins/use-csrf-prevention';
+import { useIgnoreUnknownParams } from './yoga-plugins/use-ignore-unknown-params';
 import { useValidationRules } from './yoga-plugins/use-validation-rules';
 
 export interface GraphQLApiOptions {
@@ -93,6 +94,8 @@ async function createGraphQLOptions(
         // Reproduces the error codes / HTTP statuses that Apollo Server produced, so that the
         // response shape seen by API clients is unchanged.
         useApolloCompatibleErrors(),
+        // Apollo Server ignored unknown top-level keys in the request body; Yoga rejects them.
+        useIgnoreUnknownParams(),
         useValidationRules({
             rules: options.validationRules as ValidationRule[],
             introspection: apiOptions.introspection ?? true,

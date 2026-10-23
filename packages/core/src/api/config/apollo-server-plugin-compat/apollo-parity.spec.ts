@@ -21,6 +21,7 @@ import { createSchema, createYoga } from 'graphql-yoga';
 import { describe, expect, it } from 'vitest';
 
 import { useApolloCompatibleErrors } from '../yoga-plugins/use-apollo-compatible-errors';
+import { useIgnoreUnknownParams } from '../yoga-plugins/use-ignore-unknown-params';
 
 import { useApolloServerPlugins } from './use-apollo-server-plugins';
 
@@ -193,7 +194,7 @@ async function runOnYoga(plugins: Array<ApolloServerPlugin<any>>, req: RequestSp
         schema: createSchema({ typeDefs, resolvers }),
         maskedErrors: false,
         logging: false,
-        plugins: [useApolloCompatibleErrors(), useApolloServerPlugins({ plugins })],
+        plugins: [useApolloCompatibleErrors(), useIgnoreUnknownParams(), useApolloServerPlugins({ plugins })],
     });
     try {
         const url = `http://localhost/graphql${req.search ?? ''}`;
@@ -265,6 +266,10 @@ const scenarios: Array<[string, RequestSpec]> = [
     ],
     ['a resolver error', { body: { query: '{ boom product(id: "1") { id } }' } }],
     ['a resolver error with a code', { body: { query: '{ forbidden }' } }],
+    [
+        'a body with extra top-level keys (e.g. Relay `id`)',
+        { body: { query: '{ product(id: "1") { id } }', id: 'abc123', padding: 'x'.repeat(64) } },
+    ],
     [
         'a GET request',
         { method: 'GET', search: '?query=' + encodeURIComponent('{ product(id: "7") { id name } }') },
