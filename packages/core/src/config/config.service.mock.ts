@@ -21,6 +21,7 @@ export class MockConfigService implements MockClass<ConfigService> {
         cors: false,
         middleware: [],
         apolloServerPlugins: [],
+        graphqlPlugins: [],
     };
     authOptions: {};
     defaultChannelToken: 'channel-token';

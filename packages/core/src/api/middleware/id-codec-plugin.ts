@@ -1,10 +1,12 @@
-import { ApolloServerPlugin, GraphQLRequestListener, GraphQLServerContext } from '@apollo/server';
 import { isObject } from '@vendure/common/lib/shared-utils';
-import { DocumentNode } from 'graphql';
+import { DocumentNode, GraphQLSchema } from 'graphql';
+import { handleStreamOrSingleExecutionResult, Plugin } from 'graphql-yoga';
 
 import { ApiType } from '../common/get-api-type';
 import { GraphqlValueTransformer } from '../common/graphql-value-transformer';
 import { IdCodecService } from '../common/id-codec.service';
+
+type OnExecuteHookResult = Awaited<ReturnType<NonNullable<Plugin['onExecute']>>>;
 
 /**
  * Encodes the ids of outgoing responses according to the configured EntityIdStrategy.
@@ -12,7 +14,7 @@ import { IdCodecService } from '../common/id-codec.service';
  * This is done here and not via a Nest Interceptor because it's not possible
  * according to https://github.com/nestjs/graphql/issues/320
  */
-export class IdCodecPlugin implements ApolloServerPlugin {
+export class IdCodecPlugin implements Plugin {
     private graphqlValueTransformer: GraphqlValueTransformer;
     // Job ids only exist in the Admin API. A plugin could define its own `Job` type in the Shop API.
     private readonly transformJobIds: boolean;
@@ -23,23 +25,19 @@ export class IdCodecPlugin implements ApolloServerPlugin {
         this.transformJobIds = apiType !== 'admin' || idCodecService.transformJobIds;
     }
 
-    async serverWillStart(service: GraphQLServerContext): Promise<void> {
-        this.graphqlValueTransformer = new GraphqlValueTransformer(service.schema);
-    }
+    // Envelop invokes hooks detached from the plugin object, so they are bound arrow functions.
+    onSchemaChange = ({ schema }: { schema: GraphQLSchema }) => {
+        this.graphqlValueTransformer = new GraphqlValueTransformer(schema);
+    };
 
-    async requestDidStart(): Promise<GraphQLRequestListener<any>> {
+    onExecute = (): OnExecuteHookResult => {
         return {
-            willSendResponse: async requestContext => {
-                const { document } = requestContext;
-                if (document) {
-                    const { body } = requestContext.response;
-                    if (body.kind === 'single') {
-                        this.encodeIdFields(document, body.singleResult.data);
-                    }
-                }
-            },
+            onExecuteDone: payload =>
+                handleStreamOrSingleExecutionResult(payload, ({ result, args }) => {
+                    this.encodeIdFields(args.document, result.data as Record<string, unknown> | null | undefined);
+                }),
         };
-    }
+    };
 
     private encodeIdFields(document: DocumentNode, data?: Record<string, unknown> | null) {
         if (!data) {

@@ -42,7 +42,7 @@ const SINGLETON_PACKAGES = [
     '@nestjs/common',
     '@nestjs/graphql',
     '@nestjs/typeorm',
-    '@apollo/server',
+    'graphql-yoga',
 ];
 
 /**

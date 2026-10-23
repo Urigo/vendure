@@ -1,17 +1,19 @@
-import { ApolloServerPlugin, GraphQLRequestListener, GraphQLServerContext } from '@apollo/server';
-import { DocumentNode, GraphQLNamedType, isUnionType } from 'graphql';
+import { DocumentNode, GraphQLNamedType, GraphQLSchema, isUnionType } from 'graphql';
+import { handleStreamOrSingleExecutionResult, Plugin } from 'graphql-yoga';
 
 import { Instrument } from '../../common/instrument-decorator';
 import { AssetStorageStrategy } from '../../config/asset-storage-strategy/asset-storage-strategy';
 import { ConfigService } from '../../config/config.service';
 import { GraphqlValueTransformer } from '../common/graphql-value-transformer';
 
+type OnExecuteHookResult = Awaited<ReturnType<NonNullable<Plugin['onExecute']>>>;
+
 /**
  * Transforms outputs so that any Asset instances are run through the {@link AssetStorageStrategy.toAbsoluteUrl}
  * method before being returned in the response.
  */
 @Instrument()
-export class AssetInterceptorPlugin implements ApolloServerPlugin {
+export class AssetInterceptorPlugin implements Plugin {
     private graphqlValueTransformer: GraphqlValueTransformer;
     private readonly toAbsoluteUrl: AssetStorageStrategy['toAbsoluteUrl'] | undefined;
 
@@ -24,24 +26,22 @@ export class AssetInterceptorPlugin implements ApolloServerPlugin {
         }
     }
 
-    async serverWillStart(service: GraphQLServerContext): Promise<void> {
-        this.graphqlValueTransformer = new GraphqlValueTransformer(service.schema);
-    }
+    // Envelop invokes hooks detached from the plugin object, so they are bound arrow functions.
+    onSchemaChange = ({ schema }: { schema: GraphQLSchema }) => {
+        this.graphqlValueTransformer = new GraphqlValueTransformer(schema);
+    };
 
-    async requestDidStart(): Promise<GraphQLRequestListener<any>> {
+    onExecute = (): OnExecuteHookResult => {
         return {
-            willSendResponse: async requestContext => {
-                const { document } = requestContext;
-                if (document) {
-                    const { body } = requestContext.response;
-                    const req = requestContext.contextValue.req;
-                    if (body.kind === 'single') {
-                        this.prefixAssetUrls(req, document, body.singleResult.data);
+            onExecuteDone: payload =>
+                handleStreamOrSingleExecutionResult(payload, ({ result, args }) => {
+                    if (result.data) {
+                        const req = (args.contextValue as any)?.req;
+                        this.prefixAssetUrls(req, args.document, result.data as Record<string, unknown>);
                     }
-                }
-            },
+                }),
         };
-    }
+    };
 
     private prefixAssetUrls(request: any, document: DocumentNode, data?: Record<string, unknown> | null) {
         const typeTree = this.graphqlValueTransformer.getOutputTypeTree(document);
