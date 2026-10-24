@@ -233,7 +233,10 @@ describe('useApolloServerPlugins()', () => {
 
         expect(status).toBe(500);
         expect(body.data).toBeUndefined();
-        expect(body.errors).toEqual([{ message: 'Query is too complex' }]);
+        // Apollo formats the error like any other: a plain object with a default code.
+        expect(body.errors).toEqual([
+            { message: 'Query is too complex', extensions: { code: 'INTERNAL_SERVER_ERROR' } },
+        ]);
         expect(rejectingEvents).not.toContain('executionDidStart');
         expect(rejectingEvents.slice(-2)).toEqual(['didEncounterErrors(1)', 'willSendResponse(single)']);
     });

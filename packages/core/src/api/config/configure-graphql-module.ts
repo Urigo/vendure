@@ -7,6 +7,7 @@ import { Plugin as YogaPlugin } from 'graphql-yoga';
 
 import { ConfigModule } from '../../config/config.module';
 import { ConfigService } from '../../config/config.service';
+import { Logger } from '../../config/logger/vendure-logger';
 import { I18nModule } from '../../i18n/i18n.module';
 import { I18nService } from '../../i18n/i18n.service';
 import { ServiceModule } from '../../service/service.module';
@@ -17,7 +18,7 @@ import { AssetInterceptorPlugin } from '../middleware/asset-interceptor-plugin';
 import { IdCodecPlugin } from '../middleware/id-codec-plugin';
 import { TranslateErrorsPlugin } from '../middleware/translate-errors-plugin';
 
-import { useApolloServerPlugins } from './apollo-server-plugin-compat';
+import { ApolloLogger, createVendureApolloServerPluginsCompat } from './apollo-server-plugin-compat';
 import { generateResolvers } from './generate-resolvers';
 import { getFinalVendureSchema, isUsingDefaultEntityIdStrategy } from './get-final-vendure-schema';
 import { VendureYogaDriver } from './vendure-yoga-driver';
@@ -27,6 +28,14 @@ import { useApolloCompatibleErrors } from './yoga-plugins/use-apollo-compatible-
 import { useCsrfPrevention } from './yoga-plugins/use-csrf-prevention';
 import { useIgnoreUnknownParams } from './yoga-plugins/use-ignore-unknown-params';
 import { useValidationRules } from './yoga-plugins/use-validation-rules';
+
+const apolloLoggerCtx = 'ApolloServerPlugin';
+const apolloLogger: ApolloLogger = {
+    debug: (message?: unknown) => Logger.debug(String(message), apolloLoggerCtx),
+    info: (message?: unknown) => Logger.info(String(message), apolloLoggerCtx),
+    warn: (message?: unknown) => Logger.warn(String(message), apolloLoggerCtx),
+    error: (message?: unknown) => Logger.error(String(message), apolloLoggerCtx),
+};
 
 export interface GraphQLApiOptions {
     apiType: 'shop' | 'admin';
@@ -90,7 +99,19 @@ async function createGraphQLOptions(
     );
     const { apiOptions } = configService;
 
+    // Apollo Server plugins supplied by the user (or by Vendure plugins such as HardenPlugin) keep
+    // working through the compatibility layer, together with the plugins which Apollo Server and
+    // @nestjs/apollo installed implicitly (cache control, APOLLO_KEY usage reporting, and Nest's
+    // "200 once data has been produced" status handling), in the order Apollo Server ran them.
+    const apolloCompat = createVendureApolloServerPluginsCompat(apiOptions.apolloServerPlugins, {
+        logger: apolloLogger,
+        getRequestHeaders: getOriginalRequestHeaderEntries,
+    });
+
     const plugins: YogaPlugin[] = [
+        // Sees each request first, so that Apollo plugins observe execution errors before
+        // anything rewrites them (as `didEncounterErrors` does on Apollo Server).
+        apolloCompat.early,
         // Reproduces the error codes / HTTP statuses that Apollo Server produced, so that the
         // response shape seen by API clients is unchanged.
         useApolloCompatibleErrors(),
@@ -102,7 +123,9 @@ async function createGraphQLOptions(
         }),
         // Apollo Server enabled Automatic Persisted Queries by default, and storefronts built
         // on Apollo Client's `createPersistedQueryLink()` rely on the protocol being present.
-        useAPQ(),
+        // Apollo answers a persisted-query miss with 200 (and the PERSISTED_QUERY_NOT_FOUND
+        // error), which is what those clients expect.
+        useAPQ({ responseConfig: { forceStatusCodeOk: true } }),
     ];
     if (apiOptions.csrfPrevention) {
         // Runs first so that a blocked request never reaches the request parser.
@@ -125,17 +148,8 @@ async function createGraphQLOptions(
     // then asset URLs.
     plugins.push(new TranslateErrorsPlugin(i18nService), new AssetInterceptorPlugin(configService));
     plugins.push(...(apiOptions.graphqlPlugins ?? []));
-    if (apiOptions.apolloServerPlugins.length) {
-        // Any Apollo Server plugins supplied by the user (or by Vendure plugins such as
-        // HardenPlugin) keep working through the compatibility layer. They run after Vendure's
-        // own plugins, exactly as they did when all of them were Apollo Server plugins.
-        plugins.push(
-            useApolloServerPlugins({
-                plugins: apiOptions.apolloServerPlugins,
-                getRequestHeaders: getOriginalRequestHeaderEntries,
-            }),
-        );
-    }
+    // Sees the final result, so that `willSendResponse` gets what the client will receive.
+    plugins.push(apolloCompat.late);
 
     return {
         path: '/' + options.apiPath,

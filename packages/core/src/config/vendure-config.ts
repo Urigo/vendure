@@ -300,9 +300,16 @@ export interface ApiOptions {
      * `willSendResponse` etc.) onto the corresponding Yoga hooks, and exposes a `GraphQLRequestContext` with the
      * same shape and mutability as Apollo's.
      *
+     * The plugins which Apollo Server installed implicitly keep being installed in the same way: the cache control
+     * plugin (so `info.cacheControl` and `@cacheControl` hints keep working), usage reporting when `APOLLO_KEY` and
+     * `APOLLO_GRAPH_REF` are set, and schema reporting when `APOLLO_SCHEMA_REPORTING=true` (each unless you install
+     * the plugin, or its `*Disabled` variant, yourself). So does the status handling of `@nestjs/apollo` (a response
+     * which contains `data` is sent with HTTP 200). Startup waits for every plugin's `serverWillStart`, and fails if
+     * one of them fails.
+     *
      * The compatibility layer is verified by a differential test suite which runs the same plugins on a real
-     * `ApolloServer` and on Vendure's Yoga setup and compares what the plugins observe and what clients receive.
-     * The known differences are:
+     * `ApolloServer` (set up as Vendure ran it) and on Vendure's Yoga setup, and compares what the plugins observe
+     * and what clients receive. The known differences are:
      *
      * - `GraphQLServerListener.renderLandingPage` is ignored; Vendure serves GraphiQL itself (see `playground`).
      * - `requestContext.cache` / `GraphQLServerContext.cache` is a small in-memory key-value cache rather than
@@ -328,8 +335,12 @@ export interface ApiOptions {
      * `@envelop/response-cache`, `@escape.tech/graphql-armor`, `@envelop/opentelemetry` or
      * `@graphql-yoga/plugin-persisted-operations` can be dropped straight in.
      *
-     * The plugins run after Vendure's own plugins (error translation, asset URL and ID transformation) and
-     * before any {@link ApiOptions.apolloServerPlugins}.
+     * The plugins run after Vendure's own plugins (error translation, asset URL and ID transformation).
+     *
+     * Note that Vendure transforms the result of every operation (asset URLs, and IDs when a custom
+     * {@link EntityIdStrategy} is used). A response-caching plugin which short-circuits execution must cache
+     * the transformed result and must not be combined with an ID-encoding `EntityIdStrategy`, which would encode
+     * cached IDs a second time (as was already the case with Apollo Server response-cache plugins).
      *
      * @example
      * ```ts
