@@ -108,32 +108,29 @@ async function createGraphQLOptions(
         getRequestHeaders: getOriginalRequestHeaderEntries,
     });
 
-    const plugins: YogaPlugin[] = [
-        // Sees each request first, so that Apollo plugins observe execution errors before
-        // anything rewrites them (as `didEncounterErrors` does on Apollo Server).
-        apolloCompat.early,
-        // Reproduces the error codes / HTTP statuses that Apollo Server produced, so that the
-        // response shape seen by API clients is unchanged.
-        useApolloCompatibleErrors(),
-        // Apollo Server ignored unknown top-level keys in the request body; Yoga rejects them.
-        useIgnoreUnknownParams(),
+    // BENCHMARK-ONLY switch (not part of the PR): full | nocompat | bare
+    const benchMode = process.env.VENDURE_YOGA_MODE ?? 'full';
+    const withCompat = benchMode === 'full';
+    const withApolloCompatibleRequestHandling = benchMode !== 'bare';
+    const plugins: YogaPlugin[] = [];
+    if (withCompat) {
+        plugins.push(apolloCompat.early);
+    }
+    if (withApolloCompatibleRequestHandling) {
+        plugins.push(useApolloCompatibleErrors(), useIgnoreUnknownParams());
+    }
+    plugins.push(
         useValidationRules({
             rules: options.validationRules as ValidationRule[],
             introspection: apiOptions.introspection ?? true,
         }),
-        // Apollo Server enabled Automatic Persisted Queries by default, and storefronts built
-        // on Apollo Client's `createPersistedQueryLink()` rely on the protocol being present.
-        // A miss is answered exactly as Apollo answers it (see useApolloCompatibleErrors()).
-        useAPQ(),
-    ];
+    );
+    if (withApolloCompatibleRequestHandling) {
+        plugins.push(useAPQ());
+    }
     if (apiOptions.csrfPrevention) {
-        // Runs first so that a blocked request never reaches the request parser.
         plugins.unshift(useCsrfPrevention(apiOptions.csrfPrevention));
     }
-    // We only need to add the IdCodecPlugin if the user has configured
-    // a non-default EntityIdStrategy. This is a performance optimization
-    // that prevents unnecessary traversal of each response when no
-    // actual encoding/decoding is taking place.
     if (
         !isUsingDefaultEntityIdStrategy(
             configService.entityOptions.entityIdStrategy ?? configService.entityIdStrategy,
@@ -141,18 +138,16 @@ async function createGraphQLOptions(
     ) {
         plugins.push(new IdCodecPlugin(idCodecService, options.apiType));
     }
-    // Vendure's own response transformers run in the same order as under Apollo Server: the
-    // IdCodecPlugin first (its encoding of JSON values also replaces any entity instances in them
-    // with plain copies, which the AssetInterceptorPlugin then writes to), then error translation,
-    // then asset URLs.
     plugins.push(new TranslateErrorsPlugin(i18nService), new AssetInterceptorPlugin(configService));
-    // Apollo's `didResolveOperation`, `responseForOperation` and `executionDidStart` run here, after
-    // Vendure's response transforms, so that a response supplied by an Apollo plugin still gets
-    // transformed (as it did on Apollo Server, where the transforms ran in `willSendResponse`).
-    plugins.push(apolloCompat.mid);
+    if (withCompat) {
+        plugins.push(apolloCompat.mid);
+    }
     plugins.push(...(apiOptions.graphqlPlugins ?? []));
-    // Sees the final result, so that `willSendResponse` gets what the client will receive.
-    plugins.push(apolloCompat.late);
+    if (withCompat) {
+        plugins.push(apolloCompat.late);
+    }
+    // eslint-disable-next-line no-console
+    console.log(`[bench] Yoga mode: ${benchMode}, plugins: ${plugins.length}`);
 
     return {
         path: '/' + options.apiPath,
