@@ -121,6 +121,20 @@ export function useApolloCompatibleErrors(): Plugin {
                 if (!isGraphQLErrorLike(error)) {
                     return error;
                 }
+                if (error.extensions?.code === 'PERSISTED_QUERY_NOT_FOUND') {
+                    // Apollo Server's PersistedQueryNotFoundError: Apollo Client's persisted-query link
+                    // recognises it by this message, and it is sent with 200 and a no-cache header.
+                    changed = true;
+                    return new GraphQLError('PersistedQueryNotFound', {
+                        extensions: {
+                            code: 'PERSISTED_QUERY_NOT_FOUND',
+                            http: {
+                                status: 200,
+                                headers: { 'cache-control': 'private, no-cache, must-revalidate' },
+                            },
+                        },
+                    });
+                }
                 const http = error.extensions?.http;
                 if (http?.spec) {
                     // Yoga marks parse/validation errors with `spec: true`, meaning "respond with the

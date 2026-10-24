@@ -94,13 +94,17 @@ export interface ApolloLogger {
  * split in two:
  *
  * - `early` must be registered before any plugin which rewrites execution errors or results;
- * - `late` must be registered after them.
+ * - `mid` (where `didResolveOperation`, `responseForOperation` and `executionDidStart` run) must be
+ *   registered after them, so that a response supplied by an Apollo plugin still passes through
+ *   their `onExecuteDone` hooks, as it passed through `willSendResponse` transforms on Apollo;
+ * - `late` must be registered after all of them.
  *
  * {@link useApolloServerPlugins} merges both into a single plugin for setups that have no such
  * plugins.
  */
 export interface ApolloServerPluginsCompat {
     early: YogaPlugin;
+    mid: YogaPlugin;
     late: YogaPlugin;
     /**
      * Resolves once every plugin's `serverWillStart` has completed, and rejects with the error of a
@@ -145,6 +149,8 @@ interface OperationState {
     executionEnded: boolean;
     /** A plugin's `responseForOperation` short-circuited execution. */
     responseFromPlugin: boolean;
+    /** `executionDidStart` has been invoked and the operation is being executed. */
+    executing: boolean;
     /** The request reached the execution phase (as opposed to failing in parse/validate). */
     executionStarted: boolean;
     /** `willSendResponse` has been invoked for this operation. */
@@ -375,6 +381,11 @@ export function createApolloServerPluginsCompat(
             }
             // Apollo Server does not process requests before `start()` has completed.
             await serverListeners;
+            if (!isWellFormedRequest(params)) {
+                // Apollo rejects a malformed body before any request hook runs (reporting it to
+                // `invalidRequestWasReceived` only); Yoga's own parameter check rejects it later.
+                return;
+            }
             const requestContext: MutableRequestContext = {
                 logger: loggerFor(context),
                 cache,
@@ -402,6 +413,7 @@ export function createApolloServerPluginsCompat(
                 errorsReported: false,
                 executionEnded: false,
                 responseFromPlugin: false,
+                executing: false,
                 executionStarted: false,
                 responseSent: false,
                 documentFromStore: false,
@@ -473,6 +485,35 @@ export function createApolloServerPluginsCompat(
             };
         },
 
+        onExecute({ args }) {
+            const state = stateByContext.get(args.contextValue);
+            if (!state || state.listeners.length === 0) {
+                return;
+            }
+            // Registered first, so this runs before any other plugin has touched the result.
+            // The Apollo phases before execution run in `mid`, after Vendure's own plugins.
+            return {
+                async onExecuteDone({ result }) {
+                    if (!state.executing || isAsyncIterable(result)) {
+                        // Execution was short-circuited (by `responseForOperation`, a failing
+                        // `didResolveOperation`, or another plugin), or the result is streamed:
+                        // Apollo reports streamed errors per payload, handled in `late`.
+                        return;
+                    }
+                    if (result.errors?.length) {
+                        // Reported before any other plugin has touched the errors, as in Apollo,
+                        // except that variable coercion errors are Apollo's `UserInputError`s.
+                        await didEncounterErrors(state, result.errors.map(asApolloExecutionError));
+                        applyHttpFromExecutionResult(state, result);
+                    }
+                    state.executionEnded = true;
+                    await Promise.all(state.executionListeners.map(l => l.executionDidEnd?.()));
+                },
+            };
+        },
+    };
+
+    const mid: YogaPlugin = {
         async onExecute({ args, setResultAndStopExecution }) {
             const state = stateByContext.get(args.contextValue);
             if (!state || state.listeners.length === 0) {
@@ -490,6 +531,9 @@ export function createApolloServerPluginsCompat(
             requestContext.operation = operation ?? undefined;
             requestContext.operationName = operation?.name?.value || null;
 
+            // A result set here still passes through the `onExecuteDone` hooks of the plugins
+            // registered before `mid` (Vendure's response transforms), just as Apollo ran Vendure's
+            // `willSendResponse` transforms on such responses.
             try {
                 await Promise.all(listeners.map(l => l.didResolveOperation?.(requestContext as any)));
             } catch (err) {
@@ -522,6 +566,7 @@ export function createApolloServerPluginsCompat(
                 await Promise.all(listeners.map(l => l.executionDidStart?.(requestContext as any)))
             ).filter((l): l is ExecutionListener => !!l);
             state.executionListeners.reverse();
+            state.executing = true;
             if (state.executionListeners.some(l => l.willResolveField)) {
                 const invokeWillResolveField = (...hookArgs: any[]) =>
                     invokeSyncDidStartHook(state.executionListeners, l =>
@@ -533,24 +578,6 @@ export function createApolloServerPluginsCompat(
                 });
                 enablePluginsForSchemaResolvers(args.schema);
             }
-
-            return {
-                async onExecuteDone({ result }) {
-                    if (isAsyncIterable(result)) {
-                        // Incremental delivery / subscriptions: Apollo reports errors per payload via
-                        // `didEncounterSubsequentErrors`, which `onExecutionResult` handles below.
-                        return;
-                    }
-                    if (result.errors?.length) {
-                        // Reported before any other plugin has touched the errors, as in Apollo,
-                        // except that variable coercion errors are Apollo's `UserInputError`s.
-                        await didEncounterErrors(state, result.errors.map(asApolloExecutionError));
-                        applyHttpFromExecutionResult(state, result);
-                    }
-                    state.executionEnded = true;
-                    await Promise.all(state.executionListeners.map(l => l.executionDidEnd?.()));
-                },
-            };
         },
     };
 
@@ -670,7 +697,7 @@ export function createApolloServerPluginsCompat(
         await await started;
     };
     (early as any)[APOLLO_SERVER_PLUGINS_READY] = ready;
-    return { early, late, ready };
+    return { early, mid, late, ready };
 }
 
 /**
@@ -691,8 +718,16 @@ export function createApolloServerPluginsCompat(
  * ```
  */
 export function useApolloServerPlugins(options: ApolloServerPluginCompatOptions): YogaPlugin {
-    const { early, late, ready } = createApolloServerPluginsCompat(options);
-    const plugin: YogaPlugin = { ...early, ...late };
+    const { early, mid, late, ready } = createApolloServerPluginsCompat(options);
+    const plugin: YogaPlugin = {
+        ...early,
+        ...late,
+        async onExecute(payload) {
+            const hooks = await early.onExecute?.(payload);
+            await mid.onExecute?.(payload);
+            return hooks;
+        },
+    };
     (plugin as any)[APOLLO_SERVER_PLUGINS_READY] = ready;
     return plugin;
 }
@@ -804,6 +839,20 @@ function withHttp(
         head.headers = Object.fromEntries(http.headers);
     }
     return { ...result, extensions: { ...(result.extensions as object | undefined), http: head } };
+}
+
+/**
+ * The body-shape checks Apollo Server's `runHttpQuery()` performs before `requestDidStart`.
+ */
+function isWellFormedRequest(params: Record<string, any>): boolean {
+    const isObjectOrAbsent = (value: unknown) =>
+        value == null || (typeof value === 'object' && !Array.isArray(value));
+    return (
+        (params.query == null || typeof params.query === 'string') &&
+        (params.operationName == null || typeof params.operationName === 'string') &&
+        isObjectOrAbsent(params.variables) &&
+        isObjectOrAbsent(params.extensions)
+    );
 }
 
 function requestHeaderEntries(request: Request): Array<[string, string]> {

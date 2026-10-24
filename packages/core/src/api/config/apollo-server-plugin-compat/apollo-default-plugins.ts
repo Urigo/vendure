@@ -73,8 +73,9 @@ function internalId(plugin: ApolloServerPlugin<any>): string | undefined {
  */
 export function withApolloServerDefaultPlugins(
     plugins: Array<ApolloServerPlugin<any>>,
-    options: { apollo: ApolloConfig; logger: ApolloLogger },
+    options: { apollo: ApolloConfig; logger: ApolloLogger; env?: NodeJS.ProcessEnv },
 ): Array<ApolloServerPlugin<any>> {
+    const env = options.env ?? process.env;
     const seen = new Map<string, { disabled: boolean; enabled: boolean }>();
     for (const plugin of plugins) {
         const id = internalId(plugin);
@@ -114,7 +115,7 @@ export function withApolloServerDefaultPlugins(
             );
         }
     }
-    if (!seen.has('SchemaReporting') && process.env.APOLLO_SCHEMA_REPORTING === 'true') {
+    if (!seen.has('SchemaReporting') && env.APOLLO_SCHEMA_REPORTING === 'true') {
         if (!options.apollo.key) {
             throw new Error(
                 "You've enabled schema reporting by setting the APOLLO_SCHEMA_REPORTING environment " +
@@ -174,6 +175,7 @@ export function createVendureApolloServerPluginsCompat(
     const plugins = withApolloServerDefaultPlugins([...userPlugins, createPreserveHttpStatusPlugin()], {
         apollo,
         logger: options.logger,
+        env: options.env,
     });
     return createApolloServerPluginsCompat({
         plugins,

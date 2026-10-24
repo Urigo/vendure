@@ -123,9 +123,8 @@ async function createGraphQLOptions(
         }),
         // Apollo Server enabled Automatic Persisted Queries by default, and storefronts built
         // on Apollo Client's `createPersistedQueryLink()` rely on the protocol being present.
-        // Apollo answers a persisted-query miss with 200 (and the PERSISTED_QUERY_NOT_FOUND
-        // error), which is what those clients expect.
-        useAPQ({ responseConfig: { forceStatusCodeOk: true } }),
+        // A miss is answered exactly as Apollo answers it (see useApolloCompatibleErrors()).
+        useAPQ(),
     ];
     if (apiOptions.csrfPrevention) {
         // Runs first so that a blocked request never reaches the request parser.
@@ -147,6 +146,10 @@ async function createGraphQLOptions(
     // with plain copies, which the AssetInterceptorPlugin then writes to), then error translation,
     // then asset URLs.
     plugins.push(new TranslateErrorsPlugin(i18nService), new AssetInterceptorPlugin(configService));
+    // Apollo's `didResolveOperation`, `responseForOperation` and `executionDidStart` run here, after
+    // Vendure's response transforms, so that a response supplied by an Apollo plugin still gets
+    // transformed (as it did on Apollo Server, where the transforms ran in `willSendResponse`).
+    plugins.push(apolloCompat.mid);
     plugins.push(...(apiOptions.graphqlPlugins ?? []));
     // Sees the final result, so that `willSendResponse` gets what the client will receive.
     plugins.push(apolloCompat.late);

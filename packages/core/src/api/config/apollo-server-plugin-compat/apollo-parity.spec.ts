@@ -280,7 +280,8 @@ async function startYoga(plugins: Array<ApolloServerPlugin<any>>): Promise<TestS
             compat.early,
             useApolloCompatibleErrors(),
             useIgnoreUnknownParams(),
-            useAPQ({ responseConfig: { forceStatusCodeOk: true } }),
+            useAPQ(),
+            compat.mid,
             compat.late,
         ],
     });
@@ -619,7 +620,13 @@ describe('Apollo Server plugin parity (real Apollo Server vs. Yoga + compatibili
                 { body: { query, extensions: { persistedQuery } } },
                 { body: { extensions: { persistedQuery } } },
             ];
-            const outcomes: Record<string, Array<{ status: number; body: unknown; trace: Trace }>> = {};
+            // A hash which does not match the query is rejected with 400 by both.
+            const mismatch: RequestSpec = { body: { query: '{ boom }', extensions: { persistedQuery } } };
+            const outcomes: Record<
+                string,
+                Array<{ status: number; body: unknown; trace: Trace; cacheControl?: string }>
+            > = {};
+            const mismatchStatus: Record<string, number> = {};
             for (const [name, start] of [
                 ['apollo', startApollo],
                 ['yoga', startYoga],
@@ -636,8 +643,11 @@ describe('Apollo Server plugin parity (real Apollo Server vs. Yoga + compatibili
                         trace: [...trace],
                     });
                 }
+                mismatchStatus[name] = (await server.request(mismatch)).status;
                 await server.stop();
             }
+            expect(mismatchStatus.apollo).toBe(400);
+            expect(mismatchStatus.yoga).toBe(mismatchStatus.apollo);
             expect(outcomes.apollo[0].status).toBe(200);
             expect((outcomes.apollo[0].body as any).errors[0].extensions.code).toBe(
                 'PERSISTED_QUERY_NOT_FOUND',
@@ -647,9 +657,12 @@ describe('Apollo Server plugin parity (real Apollo Server vs. Yoga + compatibili
             expect(outcomes.yoga.map(o => (o.body as any).data)).toEqual(
                 outcomes.apollo.map(o => (o.body as any).data),
             );
-            expect(
-                outcomes.yoga.map(o => (o.body as any).errors?.map((e: any) => e.extensions?.code)),
-            ).toEqual(outcomes.apollo.map(o => (o.body as any).errors?.map((e: any) => e.extensions?.code)));
+            // Full errors, including Apollo's `PersistedQueryNotFound` message which Apollo Client's
+            // persisted-query link looks for, and the no-cache header Apollo sends with a miss.
+            expect(outcomes.yoga.map(o => (o.body as any).errors)).toEqual(
+                outcomes.apollo.map(o => (o.body as any).errors),
+            );
+            expect(outcomes.yoga.map(o => o.cacheControl)).toEqual(outcomes.apollo.map(o => o.cacheControl));
         });
     });
 
@@ -678,6 +691,18 @@ describe('Apollo Server plugin parity (real Apollo Server vs. Yoga + compatibili
         }
         expect(traces.apollo[1]).not.toContain('repeat:parsingDidStart');
         expect(traces.yoga).toEqual(traces.apollo);
+    });
+
+    // Review finding: Apollo rejects malformed bodies before any request hook runs.
+    it('a body with string variables never reaches the request hooks', async () => {
+        const { apollo, yoga, apolloTrace, yogaTrace } = await compare(
+            { body: { query: '{ product(id: "1") { id } }', variables: '{"id":"1"}' } },
+            trace => [tracingPlugin('only', trace)],
+        );
+        expect(apolloTrace).toEqual([]);
+        expect(yogaTrace).toEqual(apolloTrace);
+        expect(yoga.status).toBe(apollo.status);
+        expect(relevantHeaders(yoga.headers)).toEqual(relevantHeaders(apollo.headers));
     });
 
     it('a request without a query', async () => {

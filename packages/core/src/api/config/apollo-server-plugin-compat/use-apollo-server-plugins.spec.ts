@@ -1,9 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ApolloServerPlugin, GraphQLRequestListener } from '@apollo/server';
-import { createSchema, createYoga, YogaServerInstance } from 'graphql-yoga';
+import { GraphQLError } from 'graphql';
+import { createSchema, createYoga, Plugin, YogaServerInstance } from 'graphql-yoga';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useApolloServerPlugins } from './use-apollo-server-plugins';
+import { HeaderMap } from './apollo-request-context';
+import { createApolloServerPluginsCompat, useApolloServerPlugins } from './use-apollo-server-plugins';
 
 const schema = createSchema({
     typeDefs: /* GraphQL */ `
@@ -366,5 +368,66 @@ describe('useApolloServerPlugins()', () => {
 
         expect(status).toBe(200);
         expect(body.data.product.id).toBe('1');
+    });
+
+    // Review finding: with the compat layer split around Vendure's plugins, a response supplied by
+    // an Apollo plugin must still pass through those plugins' `onExecuteDone` transforms, as it
+    // passed through their `willSendResponse` transforms on Apollo Server.
+    describe('responses supplied by Apollo plugins go through the result transforms in between', () => {
+        const transform: Plugin = {
+            onExecute() {
+                return {
+                    onExecuteDone({ result, setResult }: any) {
+                        setResult({
+                            ...result,
+                            ...(result.data ? { data: { ...result.data, transformed: true } } : {}),
+                            ...(result.errors
+                                ? {
+                                      errors: result.errors.map(
+                                          (e: any) => new GraphQLError(`translated: ${e.message}`, e),
+                                      ),
+                                  }
+                                : {}),
+                        });
+                    },
+                };
+            },
+        };
+
+        async function run(listener: Partial<GraphQLRequestListener<any>>) {
+            const compat = createApolloServerPluginsCompat({
+                plugins: [{ requestDidStart: async () => listener }],
+            });
+            const server = createYoga({
+                schema,
+                logging: false,
+                plugins: [compat.early, transform, compat.mid, compat.late],
+            });
+            await compat.ready();
+            const res = await post(server, { query: '{ product(id: "1") { id } }' });
+            await server.dispose();
+            return res.body;
+        }
+
+        it('responseForOperation', async () => {
+            const body = await run({
+                async responseForOperation() {
+                    return {
+                        http: { status: undefined, headers: new HeaderMap() },
+                        body: { kind: 'single', singleResult: { data: { product: { id: 'cached' } } } },
+                    } as any;
+                },
+            });
+            expect(body.data).toEqual({ product: { id: 'cached' }, transformed: true });
+        });
+
+        it('an error thrown from didResolveOperation', async () => {
+            const body = await run({
+                async didResolveOperation() {
+                    throw new GraphQLError('too complex');
+                },
+            });
+            expect(body.errors[0].message).toBe('translated: too complex');
+        });
     });
 });
