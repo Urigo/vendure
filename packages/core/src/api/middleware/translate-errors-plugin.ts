@@ -1,25 +1,32 @@
-import { ApolloServerPlugin, GraphQLRequestListener } from '@apollo/server';
+import { GraphQLError } from 'graphql';
+import { handleStreamOrSingleExecutionResult, Plugin } from 'graphql-yoga';
 
 import { I18nService } from '../../i18n/i18n.service';
+
+type OnExecuteHookResult = Awaited<ReturnType<NonNullable<Plugin['onExecute']>>>;
 
 /**
  * This plugin intercepts outgoing responses and translates any error messages into the
  * current request language.
  */
-export class TranslateErrorsPlugin implements ApolloServerPlugin {
+export class TranslateErrorsPlugin implements Plugin {
     constructor(private i18nService: I18nService) {}
 
-    async requestDidStart(): Promise<GraphQLRequestListener<any>> {
+    onExecute = (): OnExecuteHookResult => {
         return {
-            willSendResponse: async requestContext => {
-                const { errors, contextValue } = requestContext;
-                const { body } = requestContext.response;
-                if (errors && body.kind === 'single') {
-                    body.singleResult.errors = errors.map(err => {
-                        return this.i18nService.translateError(contextValue.req, err) as any;
+            onExecuteDone: payload =>
+                handleStreamOrSingleExecutionResult(payload, ({ result, setResult, args }) => {
+                    if (!result.errors?.length) {
+                        return;
+                    }
+                    const req = (args.contextValue as any)?.req;
+                    setResult({
+                        ...result,
+                        errors: result.errors.map(err =>
+                            this.i18nService.translateError(req, err as GraphQLError),
+                        ),
                     });
-                }
-            },
+                }),
         };
-    }
+    };
 }

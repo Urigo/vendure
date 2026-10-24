@@ -1,10 +1,12 @@
-import { ApolloServerPlugin, CSRFPreventionOptions } from '@apollo/server';
+import type { ApolloServerPlugin } from '@apollo/server';
 import { DynamicModule, Type } from '@nestjs/common';
 import { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 import { LanguageCode } from '@vendure/common/lib/generated-types';
 import { ValidationContext } from 'graphql';
+import type { Plugin } from 'graphql-yoga';
 import { DataSourceOptions } from 'typeorm';
 
+import { CsrfPreventionOptions } from '../api/config/yoga-plugins/use-csrf-prevention';
 import { Middleware } from '../common';
 import { PermissionDefinition } from '../common/permission-definition';
 import { JobBufferStorageStrategy } from '../job-queue/job-buffer/job-buffer-storage-strategy';
@@ -223,9 +225,9 @@ export interface ApiOptions {
     cors?: boolean | CorsOptions;
     /**
      * @description
-     * Enables Apollo Server's built-in CSRF prevention on both the Shop API and the Admin API.
+     * Enables CSRF prevention on both the Shop API and the Admin API.
      *
-     * When enabled, Apollo rejects any request whose `content-type` is one that a browser lets an
+     * When enabled, the server rejects any request whose `content-type` is one that a browser lets an
      * HTML form or a simple `fetch` send without a preflight, namely
      * `application/x-www-form-urlencoded`, `multipart/form-data` and `text/plain`, unless the request
      * also carries an `Apollo-Require-Preflight` or `x-apollo-operation-name` header. Requests sent as
@@ -251,6 +253,9 @@ export interface ApiOptions {
      * client cannot be changed to send either of those: name a header the client already sends, for
      * example `{ requestHeaders: ['x-my-client-header'] }`, rather than turning the protection off.
      *
+     * The semantics are those of Apollo Server's `csrfPrevention` option (which Vendure used until
+     * v3.8), including the header names, so existing clients and configuration need no changes.
+     *
      * The default is `false` to preserve the behaviour of existing clients. It is expected to change
      * to `true` in a future major release.
      *
@@ -266,7 +271,7 @@ export interface ApiOptions {
      * @default false
      * @since 3.7.3
      */
-    csrfPrevention?: boolean | CSRFPreventionOptions;
+    csrfPrevention?: boolean | CsrfPreventionOptions;
     /**
      * @description
      * Custom Express or NestJS middleware for the server. More information can be found in the {@link Middleware} docs.
@@ -284,15 +289,75 @@ export interface ApiOptions {
     trustProxy?: TrustProxyOptions;
     /**
      * @description
-     * Custom [ApolloServerPlugins](https://www.apollographql.com/docs/apollo-server/integrations/plugins/) which
-     * allow the extension of the Apollo Server, which is the underlying GraphQL server used by Vendure.
+     * Custom [Apollo Server plugins](https://www.apollographql.com/docs/apollo-server/integrations/plugins/) which
+     * hook into the request lifecycle of the GraphQL server, e.g. to perform custom data transformations on
+     * incoming operations or outgoing data.
      *
-     * Apollo plugins can be used e.g. to perform custom data transformations on incoming operations or outgoing
-     * data.
+     * Since v3.9, the GraphQL server underlying Vendure is [GraphQL Yoga](https://the-guild.dev/graphql/yoga-server)
+     * rather than Apollo Server. Plugins written against the `ApolloServerPlugin` interface continue to work
+     * unchanged: they are run through a compatibility layer which maps every Apollo request-lifecycle hook
+     * (`serverWillStart`, `requestDidStart`, `didResolveOperation`, `executionDidStart`, `willResolveField`,
+     * `willSendResponse` etc.) onto the corresponding Yoga hooks, and exposes a `GraphQLRequestContext` with the
+     * same shape and mutability as Apollo's.
+     *
+     * The plugins which Apollo Server installed implicitly keep being installed in the same way: the cache control
+     * plugin (so `info.cacheControl` and `@cacheControl` hints keep working), usage reporting when `APOLLO_KEY` and
+     * `APOLLO_GRAPH_REF` are set, and schema reporting when `APOLLO_SCHEMA_REPORTING=true` (each unless you install
+     * the plugin, or its `*Disabled` variant, yourself). So does the status handling of `@nestjs/apollo` (a response
+     * which contains `data` is sent with HTTP 200). Startup waits for every plugin's `serverWillStart`, and fails if
+     * one of them fails.
+     *
+     * The compatibility layer is verified by a differential test suite which runs the same plugins on a real
+     * `ApolloServer` (set up as Vendure ran it) and on Vendure's Yoga setup, and compares what the plugins observe
+     * and what clients receive. The known differences are:
+     *
+     * - `GraphQLServerListener.renderLandingPage` is ignored; Vendure serves GraphiQL itself (see `playground`).
+     * - `requestContext.cache` / `GraphQLServerContext.cache` is a small in-memory key-value cache rather than
+     *   Apollo's `InMemoryLRUCache`.
+     * - `parsingDidStart` and `validationDidStart` are invoked synchronously; their `*DidEnd` callbacks are still
+     *   awaited in order before `didResolveOperation`.
+     * - When the operation to run cannot be determined (an unknown `operationName`, or several operations and no
+     *   `operationName`), the request is rejected right after parsing: plugins see `didEncounterErrors` and
+     *   `willSendResponse` without the validation and execution hooks, and the error message is
+     *   "Could not determine what operation to execute." (same HTTP 400 and `OPERATION_RESOLUTION_FAILURE` code).
+     *
+     * New plugins should preferably use {@link ApiOptions.graphqlPlugins}, which accepts native Yoga/Envelop
+     * plugins and gives access to the full [Yoga plugin ecosystem](https://the-guild.dev/graphql/envelop/plugins).
      *
      * @default []
      */
     apolloServerPlugins?: ApolloServerPlugin[];
+    /**
+     * @description
+     * Custom [GraphQL Yoga plugins](https://the-guild.dev/graphql/yoga-server/docs/features/envelop-plugins)
+     * which hook into the request lifecycle of the GraphQL server. Both Yoga plugins and
+     * [Envelop plugins](https://the-guild.dev/graphql/envelop/plugins) are accepted, which means that e.g.
+     * `@envelop/response-cache`, `@escape.tech/graphql-armor`, `@envelop/opentelemetry` or
+     * `@graphql-yoga/plugin-persisted-operations` can be dropped straight in.
+     *
+     * The plugins run after Vendure's own plugins (error translation, asset URL and ID transformation).
+     *
+     * Note that Vendure transforms the result of every operation (asset URLs, and IDs when a custom
+     * {@link EntityIdStrategy} is used). A response-caching plugin which short-circuits execution must cache
+     * the transformed result and must not be combined with an ID-encoding `EntityIdStrategy`, which would encode
+     * cached IDs a second time (as was already the case with Apollo Server response-cache plugins).
+     *
+     * @example
+     * ```ts
+     * import { maxDepthPlugin } from '@escape.tech/graphql-armor-max-depth';
+     *
+     * const config: VendureConfig = {
+     *   apiOptions: {
+     *     // Reject queries nested more than 10 levels deep
+     *     graphqlPlugins: [maxDepthPlugin({ n: 10 })],
+     *   },
+     * };
+     * ```
+     *
+     * @default []
+     * @since 3.9.0
+     */
+    graphqlPlugins?: Array<Plugin<any>>;
     /**
      * @description
      * Controls whether introspection of the GraphQL APIs is enabled. For production, it is recommended to disable

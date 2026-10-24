@@ -243,11 +243,41 @@ package already emits a span per resolver, field resolvers included.
 
 
 
-### Apollo Server plugins
-Apollo Server (the underlying GraphQL server library used by Vendure) allows you to define
-[plugins](https://www.apollographql.com/docs/apollo-server/integrations/plugins/) which can be used to hook into various
-stages of the GraphQL request lifecycle and perform tasks such as data transformation. These are defined via the
-[`apiOptions.apolloServerPlugins`](/reference/typescript-api/configuration/api-options#apolloserverplugins) config property.
+### GraphQL server plugins
+
+Vendure's Shop and Admin APIs are served by [GraphQL Yoga](https://the-guild.dev/graphql/yoga-server). Plugins can hook
+into every stage of the GraphQL request lifecycle (parsing, validation, execution, every resolved field, and the outgoing
+response) to perform tasks such as caching, rate limiting, tracing or data transformation. There are two ways to add one:
+
+- [`apiOptions.graphqlPlugins`](/reference/typescript-api/configuration/api-options#graphqlplugins) accepts native
+  [Yoga](https://the-guild.dev/graphql/yoga-server/docs/features/envelop-plugins) and
+  [Envelop](https://the-guild.dev/graphql/envelop/plugins) plugins. This is the recommended option for new code, and
+  gives you the whole Envelop ecosystem: response caching, persisted operations, rate limiting, GraphQL Armor,
+  OpenTelemetry and more.
+- [`apiOptions.apolloServerPlugins`](/reference/typescript-api/configuration/api-options#apolloserverplugins) accepts
+  [Apollo Server plugins](https://www.apollographql.com/docs/apollo-server/integrations/plugins/). Vendure used Apollo
+  Server up to v3.8, and plugins written for it keep working unchanged: they run through a compatibility layer which
+  invokes the same hooks, in the same order, with the same `GraphQLRequestContext`, as Apollo Server did.
+
+```ts title="src/vendure-config.ts"
+import { maxDepthPlugin } from '@escape.tech/graphql-armor-max-depth';
+import { VendureConfig } from '@vendure/core';
+
+export const config: VendureConfig = {
+    // ...
+    apiOptions: {
+        // Any Envelop plugin can be dropped in, e.g. to reject overly deep queries
+        graphqlPlugins: [maxDepthPlugin({ n: 10 })],
+    },
+};
+```
+
+:::info Migrating from Apollo Server plugins
+There is nothing you need to change: an `ApolloServerPlugin` in `apolloServerPlugins` behaves as before. A handful of
+Apollo-specific details differ, and are listed under
+[known differences](/reference/typescript-api/configuration/api-options#apolloserverplugins):
+`renderLandingPage` is ignored (Vendure serves GraphiQL itself) and `requestContext.cache` is a small in-memory cache.
+:::
 
 
 

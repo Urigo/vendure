@@ -101,6 +101,7 @@ export const defaultConfig: RuntimeVendureConfig = {
         middleware: [],
         introspection: true,
         apolloServerPlugins: [],
+        graphqlPlugins: [],
     },
     entityIdStrategy: new AutoIncrementIdStrategy(),
     authOptions: {

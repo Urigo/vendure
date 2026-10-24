@@ -1,10 +1,24 @@
+import { createRequire } from 'node:module';
 import path from 'path';
 import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
 
 import { sharedTestConfig } from '../../vitest.shared.mjs';
 
+const require = createRequire(import.meta.url);
+
 export default defineConfig({
+    resolve: {
+        /**
+         * graphql ships both a CommonJS and an ESM build. graphql-yoga (and the rest of the
+         * externalized dependencies) load the CommonJS one, but Vite prefers the `module` field when
+         * it resolves `graphql` for a transformed spec file. graphql-js compares constructor
+         * identity, so the two builds reject each other's types with "Cannot use X from another
+         * module or realm". Pinning the specifier to the entry Node would pick keeps it to one copy
+         * (the e2e config does the same).
+         */
+        alias: [{ find: /^graphql$/, replacement: require.resolve('graphql') }],
+    },
     test: {
         ...sharedTestConfig,
         // Type-level tests (`*.spec-d.ts`) are run via `vitest --typecheck`.

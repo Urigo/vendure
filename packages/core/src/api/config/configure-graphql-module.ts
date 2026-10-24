@@ -1,10 +1,13 @@
-import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
+import { YogaDriverConfig } from '@graphql-yoga/nestjs';
+import { useAPQ } from '@graphql-yoga/plugin-apq';
 import { DynamicModule } from '@nestjs/common';
 import { GraphQLModule, GraphQLTypesLoader } from '@nestjs/graphql';
-import { GraphQLSchema, printSchema, ValidationContext } from 'graphql';
+import { GraphQLSchema, printSchema, ValidationContext, ValidationRule } from 'graphql';
+import { Plugin as YogaPlugin } from 'graphql-yoga';
 
 import { ConfigModule } from '../../config/config.module';
 import { ConfigService } from '../../config/config.service';
+import { Logger } from '../../config/logger/vendure-logger';
 import { I18nModule } from '../../i18n/i18n.module';
 import { I18nService } from '../../i18n/i18n.service';
 import { ServiceModule } from '../../service/service.module';
@@ -15,8 +18,24 @@ import { AssetInterceptorPlugin } from '../middleware/asset-interceptor-plugin';
 import { IdCodecPlugin } from '../middleware/id-codec-plugin';
 import { TranslateErrorsPlugin } from '../middleware/translate-errors-plugin';
 
+import { ApolloLogger, createVendureApolloServerPluginsCompat } from './apollo-server-plugin-compat';
 import { generateResolvers } from './generate-resolvers';
 import { getFinalVendureSchema, isUsingDefaultEntityIdStrategy } from './get-final-vendure-schema';
+import { VendureYogaDriver } from './vendure-yoga-driver';
+import { createYogaLogger } from './yoga-plugins/create-yoga-logger';
+import { getOriginalRequestHeaderEntries } from './yoga-plugins/original-request-headers';
+import { useApolloCompatibleErrors } from './yoga-plugins/use-apollo-compatible-errors';
+import { useCsrfPrevention } from './yoga-plugins/use-csrf-prevention';
+import { useIgnoreUnknownParams } from './yoga-plugins/use-ignore-unknown-params';
+import { useValidationRules } from './yoga-plugins/use-validation-rules';
+
+const apolloLoggerCtx = 'ApolloServerPlugin';
+const apolloLogger: ApolloLogger = {
+    debug: (message?: unknown) => Logger.debug(String(message), apolloLoggerCtx),
+    info: (message?: unknown) => Logger.info(String(message), apolloLoggerCtx),
+    warn: (message?: unknown) => Logger.warn(String(message), apolloLoggerCtx),
+    error: (message?: unknown) => Logger.error(String(message), apolloLoggerCtx),
+};
 
 export interface GraphQLApiOptions {
     apiType: 'shop' | 'admin';
@@ -34,8 +53,8 @@ export interface GraphQLApiOptions {
 export function configureGraphQLModule(
     getOptions: (configService: ConfigService) => GraphQLApiOptions,
 ): DynamicModule {
-    return GraphQLModule.forRootAsync<ApolloDriverConfig>({
-        driver: ApolloDriver,
+    return GraphQLModule.forRootAsync<YogaDriverConfig>({
+        driver: VendureYogaDriver,
         useFactory: (
             configService: ConfigService,
             i18nService: I18nService,
@@ -70,7 +89,7 @@ async function createGraphQLOptions(
     typesLoader: GraphQLTypesLoader,
     customFieldRelationResolverService: CustomFieldRelationResolverService,
     options: GraphQLApiOptions,
-): Promise<ApolloDriverConfig> {
+): Promise<YogaDriverConfig> {
     const builtSchema = await buildSchemaForApi(options.apiType);
     const resolvers = await generateResolvers(
         configService,
@@ -78,12 +97,39 @@ async function createGraphQLOptions(
         options.apiType,
         builtSchema,
     );
+    const { apiOptions } = configService;
 
-    const apolloServerPlugins = [
-        new TranslateErrorsPlugin(i18nService),
-        new AssetInterceptorPlugin(configService),
-        ...configService.apiOptions.apolloServerPlugins,
+    // Apollo Server plugins supplied by the user (or by Vendure plugins such as HardenPlugin) keep
+    // working through the compatibility layer, together with the plugins which Apollo Server and
+    // @nestjs/apollo installed implicitly (cache control, APOLLO_KEY usage reporting, and Nest's
+    // "200 once data has been produced" status handling), in the order Apollo Server ran them.
+    const apolloCompat = createVendureApolloServerPluginsCompat(apiOptions.apolloServerPlugins, {
+        logger: apolloLogger,
+        getRequestHeaders: getOriginalRequestHeaderEntries,
+    });
+
+    const plugins: YogaPlugin[] = [
+        // Sees each request first, so that Apollo plugins observe execution errors before
+        // anything rewrites them (as `didEncounterErrors` does on Apollo Server).
+        apolloCompat.early,
+        // Reproduces the error codes / HTTP statuses that Apollo Server produced, so that the
+        // response shape seen by API clients is unchanged.
+        useApolloCompatibleErrors(),
+        // Apollo Server ignored unknown top-level keys in the request body; Yoga rejects them.
+        useIgnoreUnknownParams(),
+        useValidationRules({
+            rules: options.validationRules as ValidationRule[],
+            introspection: apiOptions.introspection ?? true,
+        }),
+        // Apollo Server enabled Automatic Persisted Queries by default, and storefronts built
+        // on Apollo Client's `createPersistedQueryLink()` rely on the protocol being present.
+        // A miss is answered exactly as Apollo answers it (see useApolloCompatibleErrors()).
+        useAPQ(),
     ];
+    if (apiOptions.csrfPrevention) {
+        // Runs first so that a blocked request never reaches the request parser.
+        plugins.unshift(useCsrfPrevention(apiOptions.csrfPrevention));
+    }
     // We only need to add the IdCodecPlugin if the user has configured
     // a non-default EntityIdStrategy. This is a performance optimization
     // that prevents unnecessary traversal of each response when no
@@ -93,8 +139,20 @@ async function createGraphQLOptions(
             configService.entityOptions.entityIdStrategy ?? configService.entityIdStrategy,
         )
     ) {
-        apolloServerPlugins.unshift(new IdCodecPlugin(idCodecService, options.apiType));
+        plugins.push(new IdCodecPlugin(idCodecService, options.apiType));
     }
+    // Vendure's own response transformers run in the same order as under Apollo Server: the
+    // IdCodecPlugin first (its encoding of JSON values also replaces any entity instances in them
+    // with plain copies, which the AssetInterceptorPlugin then writes to), then error translation,
+    // then asset URLs.
+    plugins.push(new TranslateErrorsPlugin(i18nService), new AssetInterceptorPlugin(configService));
+    // Apollo's `didResolveOperation`, `responseForOperation` and `executionDidStart` run here, after
+    // Vendure's response transforms, so that a response supplied by an Apollo plugin still gets
+    // transformed (as it did on Apollo Server, where the transforms ran in `willSendResponse`).
+    plugins.push(apolloCompat.mid);
+    plugins.push(...(apiOptions.graphqlPlugins ?? []));
+    // Sees the final result, so that `willSendResponse` gets what the client will receive.
+    plugins.push(apolloCompat.late);
 
     return {
         path: '/' + options.apiPath,
@@ -103,26 +161,30 @@ async function createGraphQLOptions(
         inheritResolversFromInterfaces: true,
         fieldResolverEnhancers: ['guards'],
         resolvers,
-        // We no longer rely on the upload facility bundled with Apollo Server, and instead
-        // manually configure the graphql-upload package. See https://github.com/vendurehq/vendure/issues/396
-        uploads: false,
-        // `playground` is a deprecated boolean alias for GraphiQL in @nestjs/apollo v14.
-        // The options it used to accept configured the GraphQL Playground, which Apollo
-        // Server 5 removed, so only the truthiness of the configured value still means
-        // anything. Coercing also keeps the value from ever being `undefined`, which the
-        // driver reads as "serve GraphiQL unless NODE_ENV is production".
-        playground: !!options.playground,
-        csrfPrevention: configService.apiOptions.csrfPrevention ?? false,
-        // Apollo Server includes stack traces in error responses unless NODE_ENV is "production"
-        // or "test". They expose server file paths, so they are always turned off explicitly.
-        includeStacktraceInErrorResponses: false,
-        context: (req: any) => req,
+        // File uploads are handled by the graphql-upload Express middleware (see ApiModule), which
+        // has already parsed any multipart body by the time the request reaches Yoga. Yoga's own
+        // multipart parsing is therefore switched off. See https://github.com/vendurehq/vendure/issues/396
+        multipart: false,
+        // `playground` is a deprecated alias for GraphiQL. The options it used to accept configured
+        // the GraphQL Playground, which no longer exists, so only the truthiness of the configured
+        // value still means anything: a truthy value serves GraphiQL at the API path.
+        graphiql: options.playground
+            ? { title: `Vendure ${options.apiType === 'admin' ? 'Admin' : 'Shop'} API` }
+            : false,
+        // Only the API path itself is served; Yoga's landing page for unhandled routes is not wanted
+        // behind Nest's router.
+        landingPage: false,
+        // Apollo Server exposed error messages unchanged (only stack traces were suppressed), and
+        // Vendure's own I18nError messages are meant to reach the client, so masking stays off.
+        // Yoga never includes stack traces in responses, which is what Vendure already enforced.
+        maskedErrors: false,
+        // Apollo Server rejected batched requests by default; Yoga does the same when unset.
+        batching: false,
         // This is handled by the Express cors plugin
         cors: false,
-        plugins: apolloServerPlugins,
-        validationRules: options.validationRules,
-        introspection: configService.apiOptions.introspection ?? true,
-    } as ApolloDriverConfig;
+        logging: createYogaLogger(),
+        plugins,
+    } as YogaDriverConfig;
 
     /**
      * Generates the server's GraphQL schema by combining:

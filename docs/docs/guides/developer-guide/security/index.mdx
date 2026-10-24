@@ -82,7 +82,8 @@ JavaScript, and the response sets a session cookie in the victim's browser. That
 victim ends up browsing your store logged in as the attacker, and anything they enter after that
 (addresses, saved payment details, order history) sits in the attacker's account.
 
-The control that stops this is Apollo Server's CSRF prevention, not `SameSite` and not CORS. Turn it
+The control that stops this is CSRF prevention (the same mechanism, and the same header names, as Apollo Server's
+`csrfPrevention`), not `SameSite` and not CORS. Turn it
 on with `apiOptions.csrfPrevention`:
 
 ```ts
