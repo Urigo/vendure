@@ -281,9 +281,16 @@ export class GraphqlValueTransformer {
     ) {
         for (const key of Object.keys(o)) {
             path.push(key);
-            o[key] = visitorFn(key, o[key], path);
-            if (o[key] !== null && typeof o[key] === 'object') {
-                this.traverse(o[key], visitorFn, path);
+            const value = o[key];
+            const transformed = visitorFn(key, value, path);
+            // Only write back values which actually changed. A JSON-typed field can contain live
+            // entity instances (e.g. a hydrated ProductVariant), whose getter-only properties such
+            // as `price` throw "Cannot set property ... which has only a getter" when assigned to.
+            if (transformed !== value) {
+                o[key] = transformed;
+            }
+            if (transformed !== null && typeof transformed === 'object') {
+                this.traverse(transformed, visitorFn, path);
             }
             path.pop();
         }

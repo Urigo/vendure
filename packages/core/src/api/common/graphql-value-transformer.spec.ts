@@ -98,6 +98,30 @@ describe('GraphqlValueTransformer', () => {
             return data;
         }
 
+        // A JSON-typed field (e.g. `customFields` with no custom fields defined, or a plugin
+        // returning a hydrated entity) can hold class instances with getter-only properties, such
+        // as ProductVariant.price. Unchanged values must not be written back to them. This broke
+        // the `deep-query` load test with "Cannot set property price ... which has only a getter".
+        it('does not write unchanged values back to getter-only properties of JSON values', () => {
+            const schema = buildSchema(`
+                scalar JSON
+                type Query {
+                    data: JSON
+                }
+            `);
+            const jsonTransformer = new GraphqlValueTransformer(schema);
+            class Variant {
+                listPrice = 100;
+                constructor() {
+                    Object.defineProperty(this, 'price', { get: () => this.listPrice, enumerable: true });
+                }
+            }
+            const data = { data: { variant: new Variant() } };
+            const typeTree = jsonTransformer.getOutputTypeTree(parse('{ data }'));
+            expect(() => jsonTransformer.transformValues(typeTree, data, value => value)).not.toThrow();
+            expect((data.data.variant as any).price).toBe(100);
+        });
+
         // #5558 — the IdCodecPlugin uses the parent type to identify Job ids
         it('passes the parent type of a field to the visitor', () => {
             const result = markIdsWithParentType(`{ product { id job { id } } jobs { id } }`, {
