@@ -1,6 +1,6 @@
 import { Logger as YogaLogger } from 'graphql-yoga';
 
-import { Logger } from '../../../config/logger/vendure-logger';
+import { Logger, LogLevel } from '../../../config/logger/vendure-logger';
 
 const loggerCtx = 'GraphQL';
 
@@ -16,9 +16,10 @@ const loggerCtx = 'GraphQL';
  */
 export function createYogaLogger(): YogaLogger {
     return new YogaLogger({
-        // Everything from `debug` up is forwarded to the Vendure logger, which applies its own
-        // configured log level on top.
-        level: 'debug',
+        // Evaluated lazily on every log call, so that Yoga skips building (and we skip formatting)
+        // messages which the Vendure logger would discard anyway. Yoga logs at `debug` level on
+        // every request, so this matters for throughput.
+        level: () => yogaLevelFor(Logger.logger),
         writers: [
             {
                 write(level, rawAttrs, msg) {
@@ -46,6 +47,23 @@ export function createYogaLogger(): YogaLogger {
             },
         ],
     });
+}
+
+/**
+ * Maps the level of the active Vendure logger onto the minimum Yoga level worth producing.
+ * Yoga's `info`/`debug` output is forwarded at Vendure's `Debug` level (see above), so it is only
+ * produced when the Vendure logger would print it. Custom loggers which do not expose a numeric
+ * `level` receive everything, as before.
+ */
+function yogaLevelFor(vendureLogger: unknown): 'debug' | 'warn' | 'error' {
+    const level = (vendureLogger as { level?: unknown } | undefined)?.level;
+    if (typeof level !== 'number') {
+        return 'debug';
+    }
+    if (level >= LogLevel.Debug) {
+        return 'debug';
+    }
+    return level >= LogLevel.Warn ? 'warn' : 'error';
 }
 
 function formatMessage(
